@@ -31,10 +31,10 @@ function buildSessionUpdate() {
             output_audio_format: "g711_ulaw",
             voice: "marin",
             turn_detection: {
-                type: "semantic_vad",
+                type: "server_vad",
                 create_response: true,
-                interrupt_response: true,
-                eagerness: "auto",
+                interrupt_response: true
+                // eagerness: "auto",
             },
             instructions:
                 [
@@ -317,12 +317,25 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
     function interruptResponse(_reason: string) {
         if (!responseInProgress) return;
+
+        // 1. Tell OpenAI to stop generating
         if (openaiWs.readyState === WebSocket.OPEN) {
             openaiWs.send(JSON.stringify({ type: "response.cancel" }));
         }
+
+        // 2. Tell Twilio to dump its audio buffer so it stops speaking immediately
+        if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
+            twilioWs.send(JSON.stringify({
+                event: "clear",
+                streamSid: streamSid
+            }));
+        }
+
         suppressOutputAudio = true;
         pendingResponseInstructions = null;
     }
+
+
     openaiWs.on("message", async (data) => {
         const raw = typeof data === "string" ? data : data.toString("utf8");
         const serverEvent = safeJsonParse<any>(raw);
