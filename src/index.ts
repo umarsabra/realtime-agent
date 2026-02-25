@@ -8,6 +8,8 @@ import twilio from "twilio";
 // Your tool implementations (you already have these in Python)
 // Make these return plain JSON-serializable objects.
 import { getJobDetails, getJobUpdates, endCall } from "./tools";
+import { instructions } from "./utils/model";
+import { safeJsonParse } from "./utils";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-realtime";
@@ -29,26 +31,16 @@ function buildSessionUpdate() {
             modalities: ["audio", "text"],
             input_audio_format: "g711_ulaw",
             output_audio_format: "g711_ulaw",
-            voice: "sage",
+            voice: "marin",
             turn_detection: {
-                "type": "semantic_vad",
-                "eagerness": "auto", // optional
-                "create_response": true, // only in conversation mode
-                "interrupt_response": true, // only in conversation mode
+                type: "server_vad",
+                threshold: 0.7,           // Increase from default 0.5 (less sensitive)
+                prefix_padding_ms: 300,   // Wait longer before detecting speech
+                silence_duration_ms: 700, // Require longer silence to end turn
+                create_response: true,
+                interrupt_response: true,
             },
-            instructions:
-                [
-                    "You are Wendy, friendly, playful, and human-sounding customer service agent.",
-                    "You work at Midwest Solutions Inc, a dedicated solar energy solutions company.",
-                    "Speak in clear, natural American English.",
-                    "Keep responses short and conversational, use contractions, and avoid sounding robotic.",
-                    "Start by greeting the caller, introducing yourself, and asking how you can help.",
-                    'If the caller says goodbye or asks to end the call, say goodbye and use the end_call tool.',
-                    "Your main job is to provide updates on customers' jobs/projects when they call in.",
-                    "Ask for the job ID and use the get_job_updates tool.",
-                    'Every update has "reference_doctype" (stage) and "content" (the actual update).',
-                    "You can also provide details for a job/project using get_job_details after asking for the job ID.",
-                ].join(" "),
+            instructions,
             tools: [
                 {
                     type: "function",
@@ -133,13 +125,7 @@ type TwilioInboundEvent =
     | { event: "stop" }
     | { event: string;[k: string]: unknown };
 
-function safeJsonParse<T>(s: string): T | null {
-    try {
-        return JSON.parse(s) as T;
-    } catch {
-        return null;
-    }
-}
+
 
 wss.on("connection", async (twilioWs: WebSocket) => {
     if (!OPENAI_API_KEY) {
@@ -191,8 +177,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
 
 
-
-
     // ---- Twilio -> OpenAI ----
     twilioWs.on("message", (data) => {
         const raw = typeof data === "string" ? data : data.toString("utf8");
@@ -221,11 +205,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             return;
         }
     });
-
-
-
-
-
 
 
 
@@ -282,9 +261,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         callArgsBuffer.delete(callId);
 
 
-
-
-
         // Ask the model to speak the result nicely
         if (fnName === "get_job_details") {
             sendResponseCreate("Tell the caller the job details in plain English.");
@@ -299,6 +275,25 @@ wss.on("connection", async (twilioWs: WebSocket) => {
     let responseInProgress = false;
     let pendingResponseInstructions: string | null = null;
     let suppressOutputAudio = false;
+
+    // Track current assistant audio to support truncation on user barge-in
+    let currentAudioItemId: string | null = null;
+    let currentAudioSentMs = 0;
+    let currentAudioStartTimeMs: number | null = null;
+
+    function base64BytesLength(b64: string): number {
+        let len = b64.length;
+        if (len === 0) return 0;
+        if (b64.endsWith("==")) len -= 2;
+        else if (b64.endsWith("=")) len -= 1;
+        return Math.floor((len * 3) / 4);
+    }
+
+    function resetAudioTracking() {
+        currentAudioItemId = null;
+        currentAudioSentMs = 0;
+        currentAudioStartTimeMs = null;
+    }
 
     function sendResponseCreate(instructions: string) {
         if (responseInProgress) {
@@ -319,16 +314,10 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
 
 
-
     function interruptResponse(_reason: string) {
         if (!responseInProgress) return;
 
-        // 1. Tell OpenAI to stop generating
-        if (openaiWs.readyState === WebSocket.OPEN) {
-            openaiWs.send(JSON.stringify({ type: "response.cancel" }));
-        }
-
-        // 2. Tell Twilio to dump its audio buffer so it stops speaking immediately
+        // 1. Tell Twilio to dump its audio buffer
         if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
             twilioWs.send(JSON.stringify({
                 event: "clear",
@@ -336,9 +325,36 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             }));
         }
 
-        suppressOutputAudio = true;
+        // 2. Truncate the assistant's last response
+        if (currentAudioItemId && currentAudioStartTimeMs !== null) {
+            const elapsedMs = Date.now() - currentAudioStartTimeMs;
+            const playedMs = Math.max(0, Math.min(currentAudioSentMs, elapsedMs));
+            if (playedMs > 0 && openaiWs.readyState === WebSocket.OPEN) {
+                openaiWs.send(JSON.stringify({
+                    type: "conversation.item.truncate",
+                    item_id: currentAudioItemId,
+                    content_index: 0,
+                    audio_end_ms: Math.floor(playedMs),
+                }));
+            }
+        }
+
+        // 3. **NEW: Cancel the ongoing response**
+        if (openaiWs.readyState === WebSocket.OPEN) {
+            openaiWs.send(JSON.stringify({
+                type: "response.cancel"
+            }));
+        }
+
+        // Don't suppress audio - let the model respond naturally to the interruption
+        responseInProgress = false;
         pendingResponseInstructions = null;
+        resetAudioTracking();
     }
+
+
+
+
 
 
     openaiWs.on("message", async (data) => {
@@ -404,14 +420,32 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             return;
         }
 
+
+
+
         // Audio deltas from OpenAI -> Twilio media frames
         if (
             t === "response.output_audio.delta" ||
             t === "response.audio.delta" ||
             t === "output_audio_buffer.delta"
         ) {
-            if (suppressOutputAudio) return;
+            // if (suppressOutputAudio) return;
             const audioB64 = serverEvent.delta as string | undefined;
+            const itemId = (serverEvent.item_id as string | undefined) ?? null;
+
+            if (itemId && itemId !== currentAudioItemId) {
+                currentAudioItemId = itemId;
+                currentAudioSentMs = 0;
+                currentAudioStartTimeMs = Date.now();
+            } else if (currentAudioStartTimeMs === null) {
+                currentAudioStartTimeMs = Date.now();
+            }
+
+            if (audioB64) {
+                const bytes = base64BytesLength(audioB64);
+                currentAudioSentMs += (bytes / 8000) * 1000;
+            }
+
             if (audioB64 && streamSid && twilioWs.readyState === WebSocket.OPEN) {
                 twilioWs.send(
                     JSON.stringify({
@@ -424,10 +458,14 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             return;
         }
 
+
+
+        // User barge-in detected by VAD - interrupt the assistant's response immediately
         if (t === "input_audio_buffer.speech_started") {
             interruptResponse("caller_barge_in");
             return;
         }
+
 
 
 
@@ -443,6 +481,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
 
 
+        // Handle end of tool args - you could trigger the tool execution here if you want, but we'll wait for the function_call item completion for simplicity
         if (t === "response.function_call_arguments.done") {
             const callId = serverEvent.call_id as string | undefined;
             if (callId && callArgsBuffer.has(callId)) {
@@ -450,7 +489,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             }
             return;
         }
-
 
 
         // Primary hook: tool call emitted as an item completion
@@ -466,10 +504,14 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             return;
         }
 
+
+
+
         // Fallback: sometimes tool calls appear at response.done
         if (t === "response.done") {
             responseInProgress = false;
             suppressOutputAudio = false;
+            resetAudioTracking();
             if (pendingResponseInstructions) {
                 const instructions = pendingResponseInstructions;
                 pendingResponseInstructions = null;
@@ -485,9 +527,17 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             return;
         }
 
+
+
+
         if (t === "response.failed" || t === "response.cancelled") {
             responseInProgress = false;
-            suppressOutputAudio = false;
+            suppressOutputAudio = false;  // Ensure this is cleared
+            resetAudioTracking();
+
+            // **NEW: Don't force a new response, let VAD handle it naturally**
+            // The model will respond when the user finishes speaking
+
             if (pendingResponseInstructions) {
                 const instructions = pendingResponseInstructions;
                 pendingResponseInstructions = null;
@@ -495,6 +545,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             }
             return;
         }
+
     });
 
 
