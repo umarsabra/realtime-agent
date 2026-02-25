@@ -348,6 +348,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         clearBargeInTimer();
         if (_reason === "caller_barge_in") {
             bargeInTriggered = true;
+            console.log("[bridge] interrupting response due to caller barge-in");
         }
 
         // 1. Tell Twilio to dump its audio buffer
