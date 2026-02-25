@@ -296,6 +296,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
     // ---- OpenAI -> Twilio ----
     let responseInProgress = false;
     let pendingResponseInstructions: string | null = null;
+    let suppressOutputAudio = false;
 
     function sendResponseCreate(instructions: string) {
         if (responseInProgress) {
@@ -312,6 +313,15 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             );
             responseInProgress = true;
         }
+    }
+
+    function interruptResponse(reason: string) {
+        if (!responseInProgress) return;
+        if (openaiWs.readyState === WebSocket.OPEN) {
+            openaiWs.send(JSON.stringify({ type: "response.cancel", reason }));
+        }
+        suppressOutputAudio = true;
+        pendingResponseInstructions = null;
     }
     openaiWs.on("message", async (data) => {
         const raw = typeof data === "string" ? data : data.toString("utf8");
@@ -382,6 +392,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             t === "response.audio.delta" ||
             t === "output_audio_buffer.delta"
         ) {
+            if (suppressOutputAudio) return;
             const audioB64 = serverEvent.delta as string | undefined;
             if (audioB64 && streamSid && twilioWs.readyState === WebSocket.OPEN) {
                 twilioWs.send(
@@ -392,6 +403,11 @@ wss.on("connection", async (twilioWs: WebSocket) => {
                     })
                 );
             }
+            return;
+        }
+
+        if (t === "input_audio_buffer.speech_started") {
+            interruptResponse("caller_barge_in");
             return;
         }
 
@@ -429,6 +445,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         // Fallback: sometimes tool calls appear at response.done
         if (t === "response.done") {
             responseInProgress = false;
+            suppressOutputAudio = false;
             if (pendingResponseInstructions) {
                 const instructions = pendingResponseInstructions;
                 pendingResponseInstructions = null;
@@ -446,6 +463,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
         if (t === "response.failed" || t === "response.cancelled") {
             responseInProgress = false;
+            suppressOutputAudio = false;
             if (pendingResponseInstructions) {
                 const instructions = pendingResponseInstructions;
                 pendingResponseInstructions = null;
