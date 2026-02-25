@@ -315,10 +315,10 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         }
     }
 
-    function interruptResponse(reason: string) {
+    function interruptResponse(_reason: string) {
         if (!responseInProgress) return;
         if (openaiWs.readyState === WebSocket.OPEN) {
-            openaiWs.send(JSON.stringify({ type: "response.cancel", reason }));
+            openaiWs.send(JSON.stringify({ type: "response.cancel" }));
         }
         suppressOutputAudio = true;
         pendingResponseInstructions = null;
