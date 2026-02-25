@@ -1,0 +1,30 @@
+{
+  "name": "realtime-agent",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "concurrently -k -n node,ngrok \"npm:ts-watch\" \"npm:ngrok\"",
+    "ts-watch": "tsx watch src/index.ts",
+    "ngrok": "wait-on tcp:4000 && ngrok start realtime-agent"
+  },
+  "author": "Omar Sabra",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "twilio": "^5.12.2",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.3.0",
+    "@types/ws": "^8.18.1",
+    "concurrently": "^9.2.1",
+    "dotenv-cli": "^11.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "wait-on": "^9.0.4"
+  }
+}

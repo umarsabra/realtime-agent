@@ -1,0 +1,1 @@
+kill -TERM $(lsof -t -iTCP:4000 -sTCP:LISTEN
