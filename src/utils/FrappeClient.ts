@@ -41,7 +41,7 @@ export class FrappeClient {
     async list<T>(
         doctype: string,
         params: {
-            filters?: unknown; // Frappe expects JSON string; we build it here
+            filter?: unknown; // Frappe expects JSON string; we build it here
             fields?: string[];
             limit_page_length?: number;
             order_by?: string;
@@ -51,7 +51,7 @@ export class FrappeClient {
 
         const query: Record<string, string | number | undefined> = {
             fields: JSON.stringify(params.fields ?? ["*"]),
-            filters: params.filters ? JSON.stringify(params.filters) : undefined,
+            filter: params.filter ? JSON.stringify(params.filter) : undefined,
             limit_page_length: params.limit_page_length,
             order_by: params.order_by,
         };

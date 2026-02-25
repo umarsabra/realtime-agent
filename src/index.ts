@@ -29,16 +29,16 @@ function buildSessionUpdate() {
             modalities: ["audio", "text"],
             input_audio_format: "g711_ulaw",
             output_audio_format: "g711_ulaw",
-            voice: "marin",
+            voice: "sage",
             turn_detection: {
-                type: "server_vad",
-                create_response: true,
-                interrupt_response: true
-                // eagerness: "auto",
+                "type": "semantic_vad",
+                "eagerness": "auto", // optional
+                "create_response": true, // only in conversation mode
+                "interrupt_response": true, // only in conversation mode
             },
             instructions:
                 [
-                    "You are Wendy, a warm, friendly, playful, and human-sounding customer service agent.",
+                    "You are Wendy, friendly, playful, and human-sounding customer service agent.",
                     "You work at Midwest Solutions Inc, a dedicated solar energy solutions company.",
                     "Speak in clear, natural American English.",
                     "Keep responses short and conversational, use contractions, and avoid sounding robotic.",
@@ -261,6 +261,8 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             }
         } catch (e: any) {
             result = { status: "error", message: e?.message ?? String(e) };
+        } finally {
+            console.log(`[tool call] ${fnName}(${effectiveArgsJson}) =>`, result);
         }
 
         // Send tool output back to OpenAI
@@ -314,6 +316,9 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             responseInProgress = true;
         }
     }
+
+
+
 
     function interruptResponse(_reason: string) {
         if (!responseInProgress) return;
@@ -424,6 +429,8 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             return;
         }
 
+
+
         // Streaming tool args
         if (t === "response.function_call_arguments.delta") {
             const callId = serverEvent.call_id as string | undefined;
@@ -434,6 +441,8 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             return;
         }
 
+
+
         if (t === "response.function_call_arguments.done") {
             const callId = serverEvent.call_id as string | undefined;
             if (callId && callArgsBuffer.has(callId)) {
@@ -441,6 +450,8 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             }
             return;
         }
+
+
 
         // Primary hook: tool call emitted as an item completion
         if (t === "response.output_item.done") {

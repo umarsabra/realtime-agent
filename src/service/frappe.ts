@@ -35,11 +35,12 @@ export function createJobTools(deps: ToolDeps) {
             try {
                 if (!jobId) throw new AppError("Missing job_id", "error", "MISSING_JOB_ID");
                 const updates = await deps.frappe.list<Update>("Update", {
-                    filters: ["job", "=", jobId],
+                    filter: ["job", "=", jobId],
                     fields: ["*"],
                     order_by: "modified desc",
                     limit_page_length: 50,
                 });
+                console.log(`Retrieved ${updates.length} updates for job_id: ${jobId}`, updates);
                 return { status: "ok", data: updates };
             } catch (e: any) {
                 return {
