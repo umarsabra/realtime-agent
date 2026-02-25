@@ -33,3 +33,55 @@ Every update has "reference_doctype" (stage) and "content" (the actual update).
 You can also provide details for a job/project using get_job_details after asking for the job ID.
 `
 
+
+type Tool = {
+    type: string;
+    name: string;
+    description: string;
+    parameters: {
+        type: string;
+        properties: {
+            [key: string]: {
+                type: string;
+                description: string;
+            };
+        };
+        required: string[];
+    };
+};
+
+
+export const tools: Tool[] = [
+    {
+        type: "function",
+        name: "get_job_updates",
+        description:
+            "Look up the updates for a customer's job/project based on the job ID provided by the caller.",
+        parameters: {
+            type: "object",
+            properties: {
+                job_id: {
+                    type: "string",
+                    description: "Job ID provided by the caller to look up their job updates.",
+                },
+            },
+            required: ["job_id"],
+        },
+    },
+    {
+        type: "function",
+        name: "get_job_details",
+        description:
+            "Look up the details for a customer's job/project based on the job ID provided by the caller.",
+        parameters: {
+            type: "object",
+            properties: {
+                job_id: {
+                    type: "string",
+                    description: "Job ID provided by the caller to look up their job details.",
+                },
+            },
+            required: ["job_id"],
+        },
+    }
+]

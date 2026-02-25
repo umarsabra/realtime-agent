@@ -8,8 +8,10 @@ import twilio from "twilio";
 // Your tool implementations (you already have these in Python)
 // Make these return plain JSON-serializable objects.
 import { getJobDetails, getJobUpdates, endCall } from "./tools";
-import { instructions } from "./utils/model";
+import { instructions, tools } from "./utils/model";
 import { safeJsonParse } from "./utils";
+
+
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-realtime";
@@ -45,52 +47,7 @@ function buildSessionUpdate() {
                 interrupt_response: true,
             },
             instructions,
-            tools: [
-                {
-                    type: "function",
-                    name: "get_job_updates",
-                    description:
-                        "Look up the updates for a customer's job/project based on the job ID provided by the caller.",
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            job_id: {
-                                type: "string",
-                                description: "Job ID provided by the caller to look up their job updates.",
-                            },
-                        },
-                        required: ["job_id"],
-                    },
-                },
-                {
-                    type: "function",
-                    name: "get_job_details",
-                    description:
-                        "Look up the details for a customer's job/project based on the job ID provided by the caller.",
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            job_id: {
-                                type: "string",
-                                description: "Job ID provided by the caller to look up their job details.",
-                            },
-                        },
-                        required: ["job_id"],
-                    },
-                },
-                // {
-                //     type: "function",
-                //     name: "end_call",
-                //     description: "Say goodbye and hang up the call when the caller requests to end the call.",
-                //     parameters: {
-                //         type: "object",
-                //         properties: {
-                //             reason: { type: "string", description: "Brief reason for ending the call." },
-                //         },
-                //         required: ["reason"],
-                //     },
-                // },
-            ],
+            tools,
             tool_choice: "auto",
         },
     };
@@ -117,10 +74,9 @@ app.all("/twilio", (_req: Request, res: Response) => {
 
 const server = http.createServer(app);
 
-/**
- * Twilio will connect as a WebSocket client to ws(s)://your-host/media
- * We'll also open a WS client to OpenAI Realtime and bridge audio + tool calls.
- */
+
+
+
 const wss = new WebSocketServer({ server, path: "/media" });
 
 type TwilioInboundEvent =
@@ -184,7 +140,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
     // ---- Twilio -> OpenAI ----
     twilioWs.on("message", (data) => {
         const raw = typeof data === "string" ? data : data.toString("utf8");
-        const event = safeJsonParse<TwilioInboundEvent>(raw);
+        const event = safeJsonParse<TwilioInboundEvent | Record<string, any>>(raw);
         if (!event) {
             console.warn("[twilio] received non-json message:", raw);
             return;
@@ -274,8 +230,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             sendResponseCreate("Tell the caller the job details in plain English.");
         } else if (fnName === "get_job_updates") {
             sendResponseCreate("Tell the caller the job updates in plain English.");
-        } else if (fnName === "end_call") {
-            sendResponseCreate("Say goodbye briefly.");
         }
     }
 
@@ -494,12 +448,13 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             return;
         }
 
+
+        // User stopped speaking - reset barge-in state
         if (t === "input_audio_buffer.speech_stopped") {
             userSpeaking = false;
             clearBargeInTimer();
             return;
         }
-
 
 
         // Streaming tool args
@@ -511,7 +466,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             }
             return;
         }
-
 
 
         // Handle end of tool args - you could trigger the tool execution here if you want, but we'll wait for the function_call item completion for simplicity
