@@ -294,6 +294,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             return;
         }
 
+
         // User stopped speaking
         if (t === "input_audio_buffer.speech_stopped") {
             console.log("[openai] user stopped speaking");
