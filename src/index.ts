@@ -10,6 +10,7 @@ import twilio from "twilio";
 import { getJobDetails, getJobUpdates, endCall } from "./tools";
 import { instructions, tools } from "./utils/model";
 import { safeJsonParse } from "./utils";
+import { TwilioInboundEvent } from "./service/types";
 
 
 
@@ -18,9 +19,9 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-realtime";
 const PUBLIC_WSS_URL = process.env.PUBLIC_WSS_URL ?? ""; // e.g. wss://your-domain.com/media
 
 const PORT = Number(process.env.PORT ?? 4000);
-const VAD_THRESHOLD = Number(process.env.VAD_THRESHOLD ?? 0.5);
-const VAD_PREFIX_PADDING_MS = Number(process.env.VAD_PREFIX_PADDING_MS ?? 400);
-const VAD_SILENCE_DURATION_MS = Number(process.env.VAD_SILENCE_DURATION_MS ?? 900);
+const VAD_THRESHOLD = Number(process.env.VAD_THRESHOLD ?? 0.8);
+const VAD_PREFIX_PADDING_MS = Number(process.env.VAD_PREFIX_PADDING_MS ?? 500);
+const VAD_SILENCE_DURATION_MS = Number(process.env.VAD_SILENCE_DURATION_MS ?? 700);
 
 const app = express();
 
@@ -78,12 +79,6 @@ const server = http.createServer(app);
 
 const wss = new WebSocketServer({ server, path: "/media" });
 
-type TwilioInboundEvent =
-    | { event: "start"; start?: { streamSid?: string; callSid?: string; mediaFormat?: unknown } }
-    | { event: "media"; media?: { payload?: string } }
-    | { event: "stop" }
-    | { event: string;[k: string]: unknown };
-
 
 
 wss.on("connection", async (twilioWs: WebSocket) => {
@@ -101,11 +96,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             "OpenAI-Beta": "realtime=v1",
         },
     });
-
-    const callArgsBuffer = new Map<string, string>();
-    let assistantStarted = false;
-    let sessionReady = false;
-
     const closeAll = (why?: string) => {
         if (why) console.log("[bridge] closing:", why);
         try {
@@ -120,63 +110,13 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         }
     };
 
-    openaiWs.on("open", () => {
-        openaiWs.send(JSON.stringify(buildSessionUpdate()));
-    });
 
-    openaiWs.on("error", (err) => {
-        console.error("[openai ws] error:", err);
-        closeAll("openai error");
-    });
-
-    twilioWs.on("error", (err) => {
-        console.error("[twilio ws] error:", err);
-        closeAll("twilio error");
-    });
+    const callArgsBuffer = new Map<string, string>();
+    let assistantStarted = false;
+    let sessionReady = false;
+    let responseInProgress = false;
 
 
-
-    // ---- Twilio -> OpenAI ----
-    twilioWs.on("message", (data) => {
-        const raw = typeof data === "string" ? data : data.toString("utf8");
-        const event = safeJsonParse<TwilioInboundEvent | Record<string, any>>(raw);
-        if (!event) {
-            console.warn("[twilio] received non-json message:", raw);
-            return;
-        }
-
-
-        if (event.event === "start") {
-            streamSid = event.start?.streamSid ?? null;
-            callSid = event.start?.callSid ?? null;
-            console.log("[twilio] start streamSid:", streamSid, "callSid:", callSid);
-            console.log("[twilio] mediaFormat:", event.start?.mediaFormat);
-            return;
-        }
-
-        if (event.event === "media") {
-            const payload = event.media?.payload;
-
-            // send audio payloads from Twilio directly into the OpenAI WS as they arrive
-            if (payload && openaiWs.readyState === WebSocket.OPEN) {
-                openaiWs.send(JSON.stringify({ type: "input_audio_buffer.append", audio: payload }));
-            }
-            return;
-        }
-
-        if (event.event === "stop") {
-            console.log("[twilio] stop");
-            closeAll("twilio stop");
-            return;
-        }
-    });
-
-
-
-
-
-
-    // ---- Tool call handler ----
     async function handleFunctionCall(callId: string | undefined, fnName: string | undefined, argsJson: string) {
         if (!callId || !fnName) return;
 
@@ -234,17 +174,8 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         }
     }
 
-    // ---- OpenAI -> Twilio ----
-    let responseInProgress = false;
-    let pendingResponseInstructions: string | null = null;
-    let userSpeaking = false;
 
     function sendResponseCreate(instructions: string) {
-        if (responseInProgress || userSpeaking) {
-            pendingResponseInstructions = instructions;
-            return;
-        }
-
         if (openaiWs.readyState === WebSocket.OPEN) {
             openaiWs.send(
                 JSON.stringify({
@@ -258,8 +189,14 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
 
 
+    openaiWs.on("open", () => {
+        openaiWs.send(JSON.stringify(buildSessionUpdate()));
+    });
 
-
+    openaiWs.on("error", (err) => {
+        console.error("[openai ws] error:", err);
+        closeAll("openai error");
+    });
 
     openaiWs.on("message", async (data) => {
         const raw = typeof data === "string" ? data : data.toString("utf8");
@@ -274,7 +211,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         }
 
         if (t === "session.created") {
-            console.log("[openai] session created model:", serverEvent?.session?.model);
+            console.log("[openai] session started:", serverEvent.session);
             return;
         }
 
@@ -320,10 +257,9 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         }
 
         if (t === "response.created") {
-            responseInProgress = true;
+            console.log("[openai] response created: ", serverEvent.response);
             return;
         }
-
 
 
         // Audio deltas from OpenAI -> Twilio media frames
@@ -333,7 +269,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             t === "output_audio_buffer.delta"
         ) {
             const audioB64 = serverEvent.delta as string | undefined;
-
             if (audioB64 && streamSid && twilioWs.readyState === WebSocket.OPEN) {
                 twilioWs.send(
                     JSON.stringify({
@@ -346,23 +281,22 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             return;
         }
 
-
-
-        // User speech detected by VAD
         if (t === "input_audio_buffer.speech_started") {
-            userSpeaking = true;
+            console.log("[openai] user started speaking");
+            if (responseInProgress) {
+                console.log("[openai] interrupting response to listen to user speech");
+                openaiWs.send(JSON.stringify({ type: "response.cancel" })); // cancel the in-flight response
+                twilioWs.send(JSON.stringify({ event: "clear", streamSid }));   // clear any in-flight audio from OpenAI that may still be streaming in
+                responseInProgress = false;
+            } else {
+                console.log("[openai] no response in progress, just listening to user speech");
+            }
             return;
         }
 
-
         // User stopped speaking
         if (t === "input_audio_buffer.speech_stopped") {
-            userSpeaking = false;
-            if (pendingResponseInstructions && !responseInProgress) {
-                const instructions = pendingResponseInstructions;
-                pendingResponseInstructions = null;
-                sendResponseCreate(instructions);
-            }
+            console.log("[openai] user stopped speaking");
             return;
         }
 
@@ -406,40 +340,68 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
         // Fallback: sometimes tool calls appear at response.done
         if (t === "response.done") {
-            responseInProgress = false;
-            if (pendingResponseInstructions && !userSpeaking) {
-                const instructions = pendingResponseInstructions;
-                pendingResponseInstructions = null;
-                sendResponseCreate(instructions);
-            } else {
-                pendingResponseInstructions = null;
-            }
-
+            console.log("[openai] response done. Checking for pending instructions or tool calls...");
             const outputItems = serverEvent?.response?.output ?? [];
             for (const item of outputItems) {
                 if (item?.type === "function_call") {
                     await handleFunctionCall(item.call_id, item.name, item.arguments ?? "{}");
                 }
             }
+            responseInProgress = false;
             return;
         }
 
 
+
+
         if (t === "response.failed" || t === "response.cancelled") {
+            console.warn(`[openai] response ${t}:`, serverEvent);
             responseInProgress = false;
-            if (pendingResponseInstructions && !userSpeaking) {
-                const instructions = pendingResponseInstructions;
-                pendingResponseInstructions = null;
-                sendResponseCreate(instructions);
-            } else {
-                pendingResponseInstructions = null;
+        }
+        return;
+    });
+
+
+
+
+
+    // streaming media from Twilio -> OpenAI
+    twilioWs.on("message", (data) => {
+        const raw = typeof data === "string" ? data : data.toString("utf8");
+        const event = safeJsonParse<TwilioInboundEvent | any>(raw);
+        if (!event) {
+            console.warn("[twilio] received non-json message:", raw);
+            return;
+        }
+
+        if (event.event === "start") {
+            streamSid = event.start?.streamSid ?? null;
+            callSid = event.start?.callSid ?? null;
+            console.log("[twilio] start streamSid:", streamSid, "callSid:", callSid);
+            console.log("[twilio] mediaFormat:", event.start?.mediaFormat);
+            return;
+        }
+
+        if (event.event === "media") {
+            const payload = event.media?.payload;
+            // send audio payloads from Twilio directly into the OpenAI WS as they arrive
+            if (payload && openaiWs.readyState === WebSocket.OPEN) {
+                openaiWs.send(JSON.stringify({ type: "input_audio_buffer.append", audio: payload }));
             }
             return;
         }
 
+        if (event.event === "stop") {
+            console.log("[twilio] stop");
+            closeAll("twilio stop");
+            return;
+        }
     });
 
-
+    twilioWs.on("error", (err) => {
+        console.error("[twilio ws] error:", err);
+        closeAll("twilio error");
+    });
 
 
 
