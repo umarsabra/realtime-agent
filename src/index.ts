@@ -18,10 +18,9 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-realtime";
 const PUBLIC_WSS_URL = process.env.PUBLIC_WSS_URL ?? ""; // e.g. wss://your-domain.com/media
 
 const PORT = Number(process.env.PORT ?? 4000);
-const VAD_THRESHOLD = Number(process.env.VAD_THRESHOLD ?? 0.85);
+const VAD_THRESHOLD = Number(process.env.VAD_THRESHOLD ?? 0.5);
 const VAD_PREFIX_PADDING_MS = Number(process.env.VAD_PREFIX_PADDING_MS ?? 400);
 const VAD_SILENCE_DURATION_MS = Number(process.env.VAD_SILENCE_DURATION_MS ?? 900);
-const BARGE_IN_DEBOUNCE_MS = Number(process.env.BARGE_IN_DEBOUNCE_MS ?? 180);
 
 const app = express();
 
@@ -238,49 +237,10 @@ wss.on("connection", async (twilioWs: WebSocket) => {
     // ---- OpenAI -> Twilio ----
     let responseInProgress = false;
     let pendingResponseInstructions: string | null = null;
-    let suppressOutputAudio = false;
     let userSpeaking = false;
-    let bargeInTriggered = false;
-    let bargeInTimer: ReturnType<typeof setTimeout> | null = null;
-
-    // Track current assistant audio to support truncation on user barge-in
-    let currentAudioItemId: string | null = null;
-    let currentAudioSentMs = 0;
-    let currentAudioStartTimeMs: number | null = null;
-
-    function base64BytesLength(b64: string): number {
-        let len = b64.length;
-        if (len === 0) return 0;
-        if (b64.endsWith("==")) len -= 2;
-        else if (b64.endsWith("=")) len -= 1;
-        return Math.floor((len * 3) / 4);
-    }
-
-    function resetAudioTracking() {
-        currentAudioItemId = null;
-        currentAudioSentMs = 0;
-        currentAudioStartTimeMs = null;
-    }
-
-    function clearBargeInTimer() {
-        if (bargeInTimer) {
-            clearTimeout(bargeInTimer);
-            bargeInTimer = null;
-        }
-    }
-
-    function scheduleBargeIn() {
-        if (!responseInProgress || bargeInTimer) return;
-        bargeInTimer = setTimeout(() => {
-            bargeInTimer = null;
-            if (!responseInProgress) return;
-            bargeInTriggered = true;
-            interruptResponse("caller_barge_in");
-        }, BARGE_IN_DEBOUNCE_MS);
-    }
 
     function sendResponseCreate(instructions: string) {
-        if (responseInProgress) {
+        if (responseInProgress || userSpeaking) {
             pendingResponseInstructions = instructions;
             return;
         }
@@ -294,51 +254,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             );
             responseInProgress = true;
         }
-    }
-
-
-
-    function interruptResponse(_reason: string) {
-        const hasAudioInFlight = currentAudioItemId !== null || currentAudioStartTimeMs !== null;
-        if (!responseInProgress && !hasAudioInFlight) return;
-
-        clearBargeInTimer();
-        if (_reason === "caller_barge_in") {
-            bargeInTriggered = true;
-            console.log("[bridge] interrupting response due to caller barge-in");
-        }
-
-        // 1. Tell Twilio to dump its audio buffer
-        if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
-            twilioWs.send(JSON.stringify({
-                event: "clear",
-                streamSid: streamSid
-            }));
-        }
-
-        // 2. Ask the Realtime API to cancel the current response and stop sending audio
-        if (openaiWs.readyState === WebSocket.OPEN && responseInProgress) {
-            suppressOutputAudio = true;
-            openaiWs.send(JSON.stringify({ type: "response.cancel" }));
-        }
-
-        // 3. Truncate the assistant's last response
-        if (currentAudioItemId && currentAudioStartTimeMs !== null) {
-            const elapsedMs = Date.now() - currentAudioStartTimeMs;
-            const playedMs = Math.max(0, Math.min(currentAudioSentMs, elapsedMs));
-            if (playedMs > 0 && openaiWs.readyState === WebSocket.OPEN) {
-                openaiWs.send(JSON.stringify({
-                    type: "conversation.item.truncate",
-                    item_id: currentAudioItemId,
-                    content_index: 0,
-                    audio_end_ms: Math.floor(playedMs),
-                }));
-            }
-        }
-
-        // interrupt_response=true lets the server cancel; we just stop playback + truncate here.
-        pendingResponseInstructions = null;
-        resetAudioTracking();
     }
 
 
@@ -406,8 +321,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
         if (t === "response.created") {
             responseInProgress = true;
-            suppressOutputAudio = false;
-            bargeInTriggered = false;
             return;
         }
 
@@ -419,22 +332,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             t === "response.audio.delta" ||
             t === "output_audio_buffer.delta"
         ) {
-            if (suppressOutputAudio) return;
             const audioB64 = serverEvent.delta as string | undefined;
-            const itemId = (serverEvent.item_id as string | undefined) ?? null;
-
-            if (itemId && itemId !== currentAudioItemId) {
-                currentAudioItemId = itemId;
-                currentAudioSentMs = 0;
-                currentAudioStartTimeMs = Date.now();
-            } else if (currentAudioStartTimeMs === null) {
-                currentAudioStartTimeMs = Date.now();
-            }
-
-            if (audioB64) {
-                const bytes = base64BytesLength(audioB64);
-                currentAudioSentMs += (bytes / 8000) * 1000;
-            }
 
             if (audioB64 && streamSid && twilioWs.readyState === WebSocket.OPEN) {
                 twilioWs.send(
@@ -450,18 +348,21 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
 
 
-        // User barge-in detected by VAD - debounce to avoid background noise
+        // User speech detected by VAD
         if (t === "input_audio_buffer.speech_started") {
             userSpeaking = true;
-            scheduleBargeIn();
             return;
         }
 
 
-        // User stopped speaking - reset barge-in state
+        // User stopped speaking
         if (t === "input_audio_buffer.speech_stopped") {
             userSpeaking = false;
-            clearBargeInTimer();
+            if (pendingResponseInstructions && !responseInProgress) {
+                const instructions = pendingResponseInstructions;
+                pendingResponseInstructions = null;
+                sendResponseCreate(instructions);
+            }
             return;
         }
 
@@ -506,17 +407,13 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         // Fallback: sometimes tool calls appear at response.done
         if (t === "response.done") {
             responseInProgress = false;
-            suppressOutputAudio = false;
-            resetAudioTracking();
-            clearBargeInTimer();
-            if (pendingResponseInstructions && !userSpeaking && !bargeInTriggered) {
+            if (pendingResponseInstructions && !userSpeaking) {
                 const instructions = pendingResponseInstructions;
                 pendingResponseInstructions = null;
                 sendResponseCreate(instructions);
             } else {
                 pendingResponseInstructions = null;
             }
-            bargeInTriggered = false;
 
             const outputItems = serverEvent?.response?.output ?? [];
             for (const item of outputItems) {
@@ -530,21 +427,13 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
         if (t === "response.failed" || t === "response.cancelled") {
             responseInProgress = false;
-            suppressOutputAudio = false;  // Ensure this is cleared
-            resetAudioTracking();
-            clearBargeInTimer();
-
-            // **NEW: Don't force a new response, let VAD handle it naturally**
-            // The model will respond when the user finishes speaking
-
-            if (pendingResponseInstructions && !userSpeaking && !bargeInTriggered) {
+            if (pendingResponseInstructions && !userSpeaking) {
                 const instructions = pendingResponseInstructions;
                 pendingResponseInstructions = null;
                 sendResponseCreate(instructions);
             } else {
                 pendingResponseInstructions = null;
             }
-            bargeInTriggered = false;
             return;
         }
 
