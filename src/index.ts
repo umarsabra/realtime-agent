@@ -299,7 +299,8 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
 
     function interruptResponse(_reason: string) {
-        if (!responseInProgress) return;
+        const hasAudioInFlight = currentAudioItemId !== null || currentAudioStartTimeMs !== null;
+        if (!responseInProgress && !hasAudioInFlight) return;
 
         clearBargeInTimer();
         if (_reason === "caller_barge_in") {
@@ -315,7 +316,13 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             }));
         }
 
-        // 2. Truncate the assistant's last response
+        // 2. Ask the Realtime API to cancel the current response and stop sending audio
+        if (openaiWs.readyState === WebSocket.OPEN && responseInProgress) {
+            suppressOutputAudio = true;
+            openaiWs.send(JSON.stringify({ type: "response.cancel" }));
+        }
+
+        // 3. Truncate the assistant's last response
         if (currentAudioItemId && currentAudioStartTimeMs !== null) {
             const elapsedMs = Date.now() - currentAudioStartTimeMs;
             const playedMs = Math.max(0, Math.min(currentAudioSentMs, elapsedMs));
@@ -399,6 +406,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
         if (t === "response.created") {
             responseInProgress = true;
+            suppressOutputAudio = false;
             bargeInTriggered = false;
             return;
         }
@@ -411,7 +419,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             t === "response.audio.delta" ||
             t === "output_audio_buffer.delta"
         ) {
-            // if (suppressOutputAudio) return;
+            if (suppressOutputAudio) return;
             const audioB64 = serverEvent.delta as string | undefined;
             const itemId = (serverEvent.item_id as string | undefined) ?? null;
 
@@ -497,7 +505,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
         // Fallback: sometimes tool calls appear at response.done
         if (t === "response.done") {
-            console.warn("[openai] response done:", serverEvent);
             responseInProgress = false;
             suppressOutputAudio = false;
             resetAudioTracking();
@@ -542,6 +549,12 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         }
 
     });
+
+
+
+
+
+
 
 
 
