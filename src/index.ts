@@ -157,6 +157,8 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
         if (event.event === "media") {
             const payload = event.media?.payload;
+
+            // send audio payloads from Twilio directly into the OpenAI WS as they arrive
             if (payload && openaiWs.readyState === WebSocket.OPEN) {
                 openaiWs.send(JSON.stringify({ type: "input_audio_buffer.append", audio: payload }));
             }
@@ -365,6 +367,8 @@ wss.on("connection", async (twilioWs: WebSocket) => {
                     })
                 );
                 return;
+            } else {
+                console.warn("[openai] unexpected session update:", session);
             }
 
             sessionReady = true;
@@ -387,9 +391,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
                         },
                     })
                 );
-
                 sendResponseCreate("Greet the caller and ask how you can help.");
-
                 assistantStarted = true;
             }
             return;
@@ -400,7 +402,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             bargeInTriggered = false;
             return;
         }
-
 
 
 
@@ -496,6 +497,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
         // Fallback: sometimes tool calls appear at response.done
         if (t === "response.done") {
+            console.warn("[openai] response done:", serverEvent);
             responseInProgress = false;
             suppressOutputAudio = false;
             resetAudioTracking();
@@ -517,8 +519,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             }
             return;
         }
-
-
 
 
         if (t === "response.failed" || t === "response.cancelled") {

@@ -2,7 +2,7 @@ import { httpJson } from "./http";
 import type { FrappeListResponse, FrappeResourceResponse } from "../service/types";
 
 export interface FrappeClientConfig {
-    baseUrl: string; // e.g. https://app.midwestsolutions.com
+    baseUrl: string; // https://app.midwestsolutions.com
     apiKey: string;
     apiSecret: string;
     timeoutMs?: number;
@@ -13,7 +13,7 @@ export class FrappeClient {
     constructor(private cfg: FrappeClientConfig) { }
 
     private get authHeader() {
-        // Frappe token header format: "token API_KEY:API_SECRET"
+        // format: "token API_KEY:API_SECRET"
         return { Authorization: `token ${this.cfg.apiKey}:${this.cfg.apiSecret}` };
     }
 
@@ -41,7 +41,7 @@ export class FrappeClient {
     async list<T>(
         doctype: string,
         params: {
-            filter?: unknown; // Frappe expects JSON string; we build it here
+            filter?: unknown;
             fields?: string[];
             limit_page_length?: number;
             order_by?: string;
