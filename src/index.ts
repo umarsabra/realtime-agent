@@ -8,7 +8,7 @@ import twilio from "twilio";
 // Your tool implementations (you already have these in Python)
 // Make these return plain JSON-serializable objects.
 import { getJobDetails, getJobUpdates, endCall } from "./tools";
-import { instructions, tools } from "./utils/model";
+import { buildSessionUpdate, instructions, tools } from "./utils/model";
 import { safeJsonParse } from "./utils";
 import { TwilioInboundEvent } from "./service/types";
 
@@ -19,9 +19,6 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-realtime";
 const PUBLIC_WSS_URL = process.env.PUBLIC_WSS_URL ?? ""; // e.g. wss://your-domain.com/media
 
 const PORT = Number(process.env.PORT ?? 4000);
-const VAD_THRESHOLD = Number(process.env.VAD_THRESHOLD ?? 0.8);
-const VAD_PREFIX_PADDING_MS = Number(process.env.VAD_PREFIX_PADDING_MS ?? 500);
-const VAD_SILENCE_DURATION_MS = Number(process.env.VAD_SILENCE_DURATION_MS ?? 700);
 
 const app = express();
 
@@ -29,29 +26,7 @@ const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-function buildSessionUpdate() {
-    return {
-        type: "session.update",
-        session: {
-            model: OPENAI_MODEL,
-            modalities: ["audio", "text"],
-            input_audio_format: "g711_ulaw",
-            output_audio_format: "g711_ulaw",
-            voice: "marin",
-            turn_detection: {
-                type: "server_vad",
-                threshold: VAD_THRESHOLD,           // Higher = less sensitive to background noise
-                prefix_padding_ms: VAD_PREFIX_PADDING_MS,
-                silence_duration_ms: VAD_SILENCE_DURATION_MS,
-                create_response: true,
-                interrupt_response: true,
-            },
-            instructions,
-            tools,
-            tool_choice: "auto",
-        },
-    };
-}
+
 
 app.get("/", (_req: Request, res: Response) => {
     res.type("text/plain").send("ok");
@@ -75,8 +50,6 @@ app.all("/twilio", (_req: Request, res: Response) => {
 const server = http.createServer(app);
 
 
-
-
 const wss = new WebSocketServer({ server, path: "/media" });
 
 
@@ -96,8 +69,8 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             "OpenAI-Beta": "realtime=v1",
         },
     });
-    const closeAll = (why?: string) => {
-        if (why) console.log("[bridge] closing:", why);
+    const closeAll = (reason?: string) => {
+        if (reason) console.log("[bridge] closing:", reason);
         try {
             if (twilioWs.readyState === WebSocket.OPEN) twilioWs.close();
         } catch (err) {
@@ -138,7 +111,8 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             } else if (fnName === "get_job_updates") {
                 result = await getJobUpdates(String(args.job_id ?? ""));
             } else if (fnName === "end_call") {
-                // You can make this hang up in Twilio using REST API if you want, but for simplicity we'll just send a goodbye message and let the caller hang up
+                // You can make this hang up in Twilio using REST API if you want,
+                // but for simplicity we'll just send a goodbye message and let the caller hang up
                 result = await endCall(callSid ?? "", String(args.reason ?? "caller requested"));
             } else {
                 result = { status: "error", message: `Unknown tool: ${fnName}` };
@@ -163,6 +137,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             );
         }
 
+        // cleanup buffer
         callArgsBuffer.delete(callId);
 
 
@@ -176,28 +151,37 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
 
     function sendResponseCreate(instructions: string) {
-        if (openaiWs.readyState === WebSocket.OPEN) {
-            openaiWs.send(
-                JSON.stringify({
-                    type: "response.create",
-                    response: { instructions },
-                })
-            );
-            responseInProgress = true;
+        if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) {
+            console.warn("[bridge] cannot send response.create, OpenAI WS not open");
+            return;
         }
+
+
+        if (responseInProgress) {
+            console.warn("[bridge] cannot send response.create, another response is still in progress");
+            return;
+        }
+        openaiWs.send(
+            JSON.stringify({
+                type: "response.create",
+                response: { instructions },
+            })
+        );
+        responseInProgress = true;
     }
 
-
-
+    // send initial session update to set model, turn detection, tools, etc.
     openaiWs.on("open", () => {
         openaiWs.send(JSON.stringify(buildSessionUpdate()));
     });
 
+    // log and close on OpenAI WS errors - you may want to implement more robust error handling and reconnection logic in production
     openaiWs.on("error", (err) => {
         console.error("[openai ws] error:", err);
         closeAll("openai error");
     });
 
+    // Handle incoming messages/events from OpenAI
     openaiWs.on("message", async (data) => {
         const raw = typeof data === "string" ? data : data.toString("utf8");
         const serverEvent = safeJsonParse<any>(raw);
@@ -219,6 +203,9 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             const session = serverEvent?.session ?? {};
             // Ensure audio format is mulaw/8k for Twilio
             if (session.output_audio_format && session.output_audio_format !== "g711_ulaw") {
+                // If the model responded with a different audio format than we requested,
+                // we need to update the session to use g711_ulaw for compatibility with Twilio
+                console.warn("[openai] unexpected session update:", session);
                 openaiWs.send(
                     JSON.stringify({
                         type: "session.update",
@@ -226,12 +213,10 @@ wss.on("connection", async (twilioWs: WebSocket) => {
                     })
                 );
                 return;
-            } else {
-                console.warn("[openai] unexpected session update:", session);
             }
 
-            sessionReady = true;
 
+            sessionReady = true;
             if (sessionReady && !assistantStarted) {
                 // Seed a user message to make the assistant greet immediately
                 openaiWs.send(
@@ -258,6 +243,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
         if (t === "response.created") {
             console.log("[openai] response created: ", serverEvent.response);
+            responseInProgress = false; // reset in case it wasn't already
             return;
         }
 
@@ -301,8 +287,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             return;
         }
 
-
-        // Streaming tool args
+        // Streaming tool args {"call_id": "...", "delta": "..."}
         if (t === "response.function_call_arguments.delta") {
             const callId = serverEvent.call_id as string | undefined;
             const delta = serverEvent.delta as string | undefined;
@@ -339,7 +324,8 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
 
 
-        // Fallback: sometimes tool calls appear at response.done
+        // Fallback: sometimes tool calls appear at response.done instead of output_item.done,
+        // so we check for any pending tool calls here as well to be safe
         if (t === "response.done") {
             console.log("[openai] response done. Checking for pending instructions or tool calls...");
             const outputItems = serverEvent?.response?.output ?? [];
@@ -353,8 +339,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         }
 
 
-
-
+        // Log any response failures or cancellations and reset state so the model can respond to the next user input
         if (t === "response.failed" || t === "response.cancelled") {
             console.warn(`[openai] response ${t}:`, serverEvent);
             responseInProgress = false;
@@ -399,22 +384,19 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         }
     });
 
+    // Log and close on Twilio WS errors
     twilioWs.on("error", (err) => {
         console.error("[twilio ws] error:", err);
         closeAll("twilio error");
     });
-
-
-
-
-
-
 
     // Cleanup if either side closes
     twilioWs.on("close", () => closeAll("twilio close"));
     openaiWs.on("close", () => closeAll("openai close"));
 });
 
+
+// Start the server
 server.listen(PORT, () => {
     console.log(`Server listening on :${PORT}`);
     console.log(`Twilio webhook: http://localhost:${PORT}/twilio`);

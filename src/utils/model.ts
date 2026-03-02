@@ -1,3 +1,14 @@
+import "dotenv/config";
+const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-realtime";
+const VAD_THRESHOLD = Number(process.env.VAD_THRESHOLD ?? 0.8);
+const VAD_PREFIX_PADDING_MS = Number(process.env.VAD_PREFIX_PADDING_MS ?? 500);
+const VAD_SILENCE_DURATION_MS = Number(process.env.VAD_SILENCE_DURATION_MS ?? 700);
+
+
+
+
+
+
 export const instructions = `You are Wendy, friendly, playful, and human-sounding assistant.
 
 Start by greeting the caller, introducing yourself, and asking how you can help.
@@ -85,3 +96,29 @@ export const tools: Tool[] = [
         },
     }
 ]
+
+
+
+export function buildSessionUpdate() {
+    return {
+        type: "session.update",
+        session: {
+            model: OPENAI_MODEL,
+            modalities: ["audio", "text"],
+            input_audio_format: "g711_ulaw",
+            output_audio_format: "g711_ulaw",
+            voice: "marin",
+            turn_detection: {
+                type: "server_vad",
+                threshold: VAD_THRESHOLD,           // Higher = less sensitive to background noise
+                prefix_padding_ms: VAD_PREFIX_PADDING_MS,
+                silence_duration_ms: VAD_SILENCE_DURATION_MS,
+                create_response: true,
+                interrupt_response: true,
+            },
+            instructions,
+            tools,
+            tool_choice: "auto",
+        },
+    };
+}
