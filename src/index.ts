@@ -301,19 +301,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         }
 
 
-        // Primary hook: tool call emitted as an item completion
-        // if (t === "response.output_item.done") {
-        //     const item = serverEvent.item;
-        //     if (item?.type === "function_call") {
-        //         const callId = item.call_id as string | undefined;
-        //         const fnName = item.name as string | undefined;
-        //         const argsJson =
-        //             (callId ? callArgsBuffer.get(callId) : undefined) ?? (item.arguments as string) ?? "{}";
-        //         await handleFunctionCall(callId, fnName, argsJson);
-        //     }
-        //     return;
-        // }
-
 
         // User started speaking
         if (t === "input_audio_buffer.speech_started") {
