@@ -280,7 +280,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         }
 
 
-
         // Streaming tool args {"call_id": "...", "delta": "..."}
         if (t === "response.function_call_arguments.delta") {
             const callId = serverEvent.call_id as string | undefined;
@@ -299,7 +298,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             }
             return;
         }
-
 
 
         // User started speaking
@@ -357,7 +355,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             const outputItems = serverEvent?.response?.output ?? [];
             for (const item of outputItems) {
                 if (item?.type === "function_call") {
-                    console.warn("[openai] found function_call item at response.done, this should ideally be at output_item.done:", item);
+                    console.warn("[openai] found function_call item at response.done:", item);
                     await handleFunctionCall(item.call_id, item.name, item.arguments ?? "{}");
                 }
             }
