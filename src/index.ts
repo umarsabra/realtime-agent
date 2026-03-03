@@ -27,14 +27,19 @@ app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
 
-
+// Health check endpoint
 app.get("/", (_req: Request, res: Response) => {
-    res.type("text/plain").send("ok");
+    res
+        .type("text/plain")
+        .send("ok");
 });
+
 
 app.all("/twilio", (_req: Request, res: Response) => {
     if (!PUBLIC_WSS_URL) {
-        res.status(500).type("text/plain").send("Missing PUBLIC_WSS_URL");
+        res
+            .status(500)
+            .type("text/plain").send("Missing PUBLIC_WSS_URL");
         return;
     }
 
@@ -43,17 +48,14 @@ app.all("/twilio", (_req: Request, res: Response) => {
     const twiml = new VoiceResponse();
     const connect = twiml.connect();
     connect.stream({ url: PUBLIC_WSS_URL });
-
     res.type("text/xml").send(twiml.toString());
 });
+
 
 const server = http.createServer(app);
 
 
 const wss = new WebSocketServer({ server, path: "/media" });
-
-
-
 wss.on("connection", async (twilioWs: WebSocket) => {
     if (!OPENAI_API_KEY) {
         twilioWs.close(1011, "Missing OPENAI_API_KEY");
@@ -69,6 +71,9 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             "OpenAI-Beta": "realtime=v1",
         },
     });
+
+
+
     const closeAll = (reason?: string) => {
         if (reason) console.log("[bridge] closing:", reason);
         try {
@@ -140,7 +145,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         // cleanup buffer
         callArgsBuffer.delete(callId);
 
-
         // Ask the model to speak the result nicely
         if (fnName === "get_job_details") {
             sendResponseCreate("Tell the caller the job details in plain English.");
@@ -156,11 +160,11 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             return;
         }
 
+        // Prevent sending a new response.create if there's already a pending response for the current call
         if (pendingResponses.size > 0) {
             console.warn("[bridge] already have pending response for call_ids:", Array.from(pendingResponses.keys()));
             return;
         }
-
 
         openaiWs.send(
             JSON.stringify({
@@ -168,12 +172,15 @@ wss.on("connection", async (twilioWs: WebSocket) => {
                 response: { instructions },
             })
         );
+        console.log("[bridge] sent response.create with instructions:", instructions);
     }
+
 
     // send initial session update to set model, turn detection, tools, etc.
     openaiWs.on("open", () => {
         openaiWs.send(JSON.stringify(buildSessionUpdate()));
     });
+
 
     // log and close on OpenAI WS errors - you may want to implement more robust error handling and reconnection logic in production
     openaiWs.on("error", (err) => {
@@ -181,11 +188,12 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         closeAll("openai error");
     });
 
+
     // Handle incoming messages/events from OpenAI
     openaiWs.on("message", async (data) => {
         const raw = typeof data === "string" ? data : data.toString("utf8");
         const serverEvent = safeJsonParse<any>(raw);
-        if (!serverEvent) return;
+        if (!serverEvent) return;   // ignore non-json messages
 
         const t = serverEvent.type as string | undefined;
 
@@ -194,14 +202,11 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             return;
         }
 
+
         if (t === "session.created") {
             console.log("[openai] session started.");
             return;
         }
-
-
-
-
 
 
         // Ensure the session is ready and using the correct audio format before we start sending audio or tool calls
@@ -248,16 +253,12 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         }
 
 
-
         // mark the response as pending when it's created so we can track it and prevent overlapping responses for the same tool call
         if (t === "response.created") {
+            console.log("[openai] response created: ", serverEvent.response.id);
             pendingResponses.set(serverEvent.response.id, true);
-            console.log("[openai] response created: ", serverEvent.response);
             return;
         }
-
-
-
 
 
         // Audio deltas from OpenAI -> Twilio media frames
@@ -280,21 +281,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         }
 
 
-        if (t === "input_audio_buffer.speech_started") {
-            console.log("[openai] user started speaking");
-            if (pendingResponses.size > 0) {
-                openaiWs.send(JSON.stringify({ type: "response.cancel" })); // cancel the in-flight response
-                pendingResponses.clear();
-            }
-            twilioWs.send(JSON.stringify({ event: "clear", streamSid }));   // clear any in-flight audio from OpenAI that may still be streaming in
-            return;
-        }
-
-        // User stopped speaking
-        if (t === "input_audio_buffer.speech_stopped") {
-            console.log("[openai] user stopped speaking");
-            return;
-        }
 
         // Streaming tool args {"call_id": "...", "delta": "..."}
         if (t === "response.function_call_arguments.delta") {
@@ -330,16 +316,57 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         }
 
 
+        // User started speaking
+        if (t === "input_audio_buffer.speech_started") {
+            console.log("[openai] user started speaking");
+            twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
+            if (pendingResponses.size > 0) {
+                openaiWs.send(JSON.stringify({ type: "response.cancel" }));
+            }
+            return;
+        }
+
+
+        // User stopped speaking
+        if (t === "input_audio_buffer.speech_stopped") {
+            console.log("[openai] user stopped speaking");
+            return;
+        }
+
+
+        // Log any response failures or cancellations and reset state so the model can respond to the next user input
+        if (t === "response.failed") {
+            console.warn(`[openai] response ${t}:`, serverEvent);
+            pendingResponses.delete(serverEvent.response?.id);
+            return;
+        }
+
+
+        // Clear any pending response state so the model can respond to the next user input without thinking there's still a pending response
+        if (t === "response.cancelled") {
+            console.log("[openai] response cancelled, cleared pending responses and in-flight audio", serverEvent);
+            const itemId = serverEvent?.response?.output?.[0]?.id;
+            const request = JSON.stringify({
+                type: "conversation.item.truncate",
+                item_id: itemId,
+                content_index: 0,
+                audio_end_ms: 1500 // truncate audio after 1.5 seconds
+            });
+            openaiWs.send(request);
+            pendingResponses.clear();
+            return;
+        }
+
+
 
         // Fallback: sometimes tool calls appear at response.done instead of output_item.done,
         // so we check for any pending tool calls here as well to be safe
         if (t === "response.done") {
-            console.log("[openai] response done. Checking for pending instructions or tool calls...");
-
             if (pendingResponses.has(serverEvent.response?.id)) {
                 pendingResponses.delete(serverEvent.response.id);
                 console.log("[openai] marked response as completed for response.id:", serverEvent.response?.id);
             }
+
 
             const outputItems = serverEvent?.response?.output ?? [];
             for (const item of outputItems) {
@@ -352,10 +379,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         }
 
 
-        // Log any response failures or cancellations and reset state so the model can respond to the next user input
-        if (t === "response.failed" || t === "response.cancelled") {
-            console.warn(`[openai] response ${t}:`, serverEvent);
-        }
         return;
     });
 

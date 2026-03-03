@@ -7,8 +7,6 @@ const VAD_SILENCE_DURATION_MS = Number(process.env.VAD_SILENCE_DURATION_MS ?? 70
 
 
 
-
-
 export const instructions = `You are Wendy, friendly, playful, and human-sounding assistant.
 
 Start by greeting the caller, introducing yourself, and asking how you can help.
