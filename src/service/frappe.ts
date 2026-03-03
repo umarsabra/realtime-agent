@@ -40,7 +40,6 @@ export function createJobTools(deps: ToolDeps) {
                     order_by: "modified desc",
                     limit_page_length: 50,
                 });
-                console.log(`Retrieved ${updates.length} updates for job_id: ${jobId}`, updates);
                 return { status: "ok", data: updates };
             } catch (e: any) {
                 return {

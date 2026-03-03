@@ -125,7 +125,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         } catch (e: any) {
             result = { status: "error", message: e?.message ?? String(e) };
         } finally {
-            console.log(`[tool call] ${fnName}(${effectiveArgsJson}) =>`, result);
+            console.log(`[tool call] ${fnName}(${effectiveArgsJson})`);
         }
 
         // Send tool output back to OpenAI
@@ -147,9 +147,9 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
         // Ask the model to speak the result nicely
         if (fnName === "get_job_details") {
-            sendResponseCreate("Tell the caller the job details in plain English.");
+            setTimeout(() => sendResponseCreate("Tell the caller the job details in plain English."), 1000)
         } else if (fnName === "get_job_updates") {
-            sendResponseCreate("Tell the caller the job updates in plain English.");
+            setTimeout(() => sendResponseCreate("Tell the caller the job updates in plain English."), 1000)
         }
     }
 
@@ -207,7 +207,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             console.log("[openai] session started.");
             return;
         }
-
 
         // Ensure the session is ready and using the correct audio format before we start sending audio or tool calls
         if (t === "session.updated") {
@@ -303,17 +302,17 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
 
         // Primary hook: tool call emitted as an item completion
-        if (t === "response.output_item.done") {
-            const item = serverEvent.item;
-            if (item?.type === "function_call") {
-                const callId = item.call_id as string | undefined;
-                const fnName = item.name as string | undefined;
-                const argsJson =
-                    (callId ? callArgsBuffer.get(callId) : undefined) ?? (item.arguments as string) ?? "{}";
-                await handleFunctionCall(callId, fnName, argsJson);
-            }
-            return;
-        }
+        // if (t === "response.output_item.done") {
+        //     const item = serverEvent.item;
+        //     if (item?.type === "function_call") {
+        //         const callId = item.call_id as string | undefined;
+        //         const fnName = item.name as string | undefined;
+        //         const argsJson =
+        //             (callId ? callArgsBuffer.get(callId) : undefined) ?? (item.arguments as string) ?? "{}";
+        //         await handleFunctionCall(callId, fnName, argsJson);
+        //     }
+        //     return;
+        // }
 
 
         // User started speaking
