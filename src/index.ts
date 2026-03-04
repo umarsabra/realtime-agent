@@ -8,7 +8,7 @@ import twilio from "twilio";
 // Your tool implementations (you already have these in Python)
 // Make these return plain JSON-serializable objects.
 import { getJobDetails, getJobUpdates, endCall } from "./tools";
-import { buildSessionUpdate, instructions, tools } from "./utils/model";
+import { buildSessionUpdate } from "./utils/model";
 import { safeJsonParse } from "./utils";
 import { TwilioInboundEvent } from "./service/types";
 
@@ -22,7 +22,7 @@ const PORT = Number(process.env.PORT ?? 4000);
 
 const app = express();
 
-// Twilio may POST x-www-form-urlencoded to your webhook
+
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
@@ -35,6 +35,7 @@ app.get("/", (_req: Request, res: Response) => {
 });
 
 
+// Twilio webhook endpoint to receive calls and stream media
 app.all("/twilio", (_req: Request, res: Response) => {
     if (!PUBLIC_WSS_URL) {
         res
@@ -53,9 +54,9 @@ app.all("/twilio", (_req: Request, res: Response) => {
 
 
 const server = http.createServer(app);
-
-
 const wss = new WebSocketServer({ server, path: "/media" });
+
+
 wss.on("connection", async (twilioWs: WebSocket) => {
     if (!OPENAI_API_KEY) {
         twilioWs.close(1011, "Missing OPENAI_API_KEY");
@@ -114,7 +115,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             if (fnName === "get_job_details") {
                 result = await getJobDetails(String(args.job_id ?? ""));
             } else if (fnName === "get_job_updates") {
-                result = await getJobUpdates(String(args.job_id ?? ""));
+                result = await getJobUpdates(String(args.job_id ?? ""), args.stage ?? undefined);
             } else if (fnName === "end_call") {
                 // You can make this hang up in Twilio using REST API if you want,
                 // but for simplicity we'll just send a goodbye message and let the caller hang up
@@ -127,6 +128,8 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         } finally {
             console.log(`[tool call] ${fnName}(${effectiveArgsJson})`);
         }
+
+        console.log(`[tool result] ${fnName}:`, result);
 
         // Send tool output back to OpenAI
         if (openaiWs.readyState === WebSocket.OPEN) {
@@ -147,9 +150,9 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
         // Ask the model to speak the result nicely
         if (fnName === "get_job_details") {
-            setTimeout(() => sendResponseCreate("Tell the caller the job details in plain English."), 1000)
+            sendResponseCreate("Tell the caller the job details in plain English.");
         } else if (fnName === "get_job_updates") {
-            setTimeout(() => sendResponseCreate("Tell the caller the job updates in plain English."), 1000)
+            sendResponseCreate("Tell the caller the job updates in plain English.")
         }
     }
 
@@ -290,6 +293,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             return;
         }
 
+
         // Handle end of tool args - you could trigger the tool execution here if you want, but we'll wait for the function_call item completion for simplicity
         if (t === "response.function_call_arguments.done") {
             const callId = serverEvent.call_id as string | undefined;
@@ -351,11 +355,10 @@ wss.on("connection", async (twilioWs: WebSocket) => {
                 console.log("[openai] marked response as completed for response.id:", serverEvent.response?.id);
             }
 
-
             const outputItems = serverEvent?.response?.output ?? [];
             for (const item of outputItems) {
                 if (item?.type === "function_call") {
-                    console.warn("[openai] found function_call item at response.done:", item);
+                    console.warn("[openai] found function_call item at response.done")
                     await handleFunctionCall(item.call_id, item.name, item.arguments ?? "{}");
                 }
             }
@@ -365,10 +368,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
         return;
     });
-
-
-
-
 
 
 

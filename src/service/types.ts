@@ -8,7 +8,15 @@ export type FrappeListResponse<T> = {
 
 // You can expand these types as you learn your real Job/Update schema.
 export type Job = Record<string, unknown> & { name?: string };
-export type Update = Record<string, unknown> & { name?: string; job?: string };
+export type Update = {
+    name?: string;
+    job: string;
+    owner: string;
+    reference_doctype?: string;
+    reference_name?: string;
+    creation: string | Date;
+    content: string;
+}
 
 export type GetJobArgs = { job_id: string };
 export type EndCallArgs = { reason: string };

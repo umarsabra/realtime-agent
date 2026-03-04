@@ -10,6 +10,9 @@ export interface ToolDeps {
     twilio?: TwilioCallService; // optional in dev
 }
 
+
+
+
 export function createJobTools(deps: ToolDeps) {
 
     return {
@@ -31,13 +34,18 @@ export function createJobTools(deps: ToolDeps) {
 
 
 
-        async getJobUpdates(jobId: string): Promise<ToolResult<Update[]>> {
+
+        async getJobUpdates(jobId: string, stage?: string): Promise<ToolResult<Update[]>> {
             try {
                 if (!jobId) throw new AppError("Missing job_id", "error", "MISSING_JOB_ID");
+                let filters: any[] = [["job", "=", jobId]];
+                if (stage) {
+                    filters.push(["reference_doctype", "=", stage]);
+                }
                 const updates = await deps.frappe.list<Update>("Update", {
-                    filter: ["job", "=", jobId],
+                    filters,
                     fields: ["*"],
-                    order_by: "modified desc",
+                    order_by: "creation asc",
                     limit_page_length: 50,
                 });
                 return { status: "ok", data: updates };
@@ -53,13 +61,10 @@ export function createJobTools(deps: ToolDeps) {
 
 
 
-
-
         async endCall(callSid: string | null | undefined, reason: string) {
             try {
                 if (!callSid) throw new AppError("Missing callSid", "error", "MISSING_CALL_SID");
                 if (!deps.twilio) throw new AppError("Missing Twilio client", "error", "MISSING_TWILIO_CLIENT");
-
                 const res = await deps.twilio.endCall(callSid, reason);
                 return res;
             } catch (e: any) {
