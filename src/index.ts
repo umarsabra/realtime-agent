@@ -11,6 +11,8 @@ import { getJobDetails, getJobUpdates, endCall } from "./tools";
 import { buildSessionUpdate } from "./utils/model";
 import { safeJsonParse } from "./utils";
 import { TwilioInboundEvent } from "./service/types";
+import Connection from "./service/Connection";
+import { TwilioConnection } from "./service/twilio";
 
 
 
@@ -57,13 +59,16 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/media" });
 
 
-wss.on("connection", async (twilioWs: WebSocket) => {
+
+
+
+
+
+const handleConnection = async (connection: Connection) => {
     if (!OPENAI_API_KEY) {
-        twilioWs.close(1011, "Missing OPENAI_API_KEY");
+        connection.close(1011, "Missing OPENAI_API_KEY");
         return;
     }
-
-    let streamSid: string | null = null;
     let callSid: string | null = null;
 
     const openaiWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=${encodeURIComponent(OPENAI_MODEL)}`, {
@@ -78,7 +83,7 @@ wss.on("connection", async (twilioWs: WebSocket) => {
     const closeAll = (reason?: string) => {
         if (reason) console.log("[bridge] closing:", reason);
         try {
-            if (twilioWs.readyState === WebSocket.OPEN) twilioWs.close();
+            if (connection.ready) connection.close();
         } catch (err) {
             console.error("Error closing twilio ws:", err);
         }
@@ -205,7 +210,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             return;
         }
 
-
         if (t === "session.created") {
             console.log("[openai] session started.");
             return;
@@ -254,14 +258,12 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             return;
         }
 
-
         // mark the response as pending when it's created so we can track it and prevent overlapping responses for the same tool call
         if (t === "response.created") {
             console.log("[openai] response created: ", serverEvent.response.id);
             pendingResponses.set(serverEvent.response.id, true);
             return;
         }
-
 
         // Audio deltas from OpenAI -> Twilio media frames
         if (
@@ -270,18 +272,11 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             t === "output_audio_buffer.delta"
         ) {
             const audioB64 = serverEvent.delta as string | undefined;
-            if (audioB64 && streamSid && twilioWs.readyState === WebSocket.OPEN) {
-                twilioWs.send(
-                    JSON.stringify({
-                        event: "media",
-                        streamSid,
-                        media: { payload: audioB64 },
-                    })
-                );
+            if (audioB64) {
+                connection.stream(audioB64);
             }
             return;
         }
-
 
         // Streaming tool args {"call_id": "...", "delta": "..."}
         if (t === "response.function_call_arguments.delta") {
@@ -293,7 +288,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             return;
         }
 
-
         // Handle end of tool args - you could trigger the tool execution here if you want, but we'll wait for the function_call item completion for simplicity
         if (t === "response.function_call_arguments.done") {
             const callId = serverEvent.call_id as string | undefined;
@@ -303,17 +297,15 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             return;
         }
 
-
         // User started speaking
         if (t === "input_audio_buffer.speech_started") {
             console.log("[openai] user started speaking");
-            twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
+            connection.clear()
             if (pendingResponses.size > 0) {
                 openaiWs.send(JSON.stringify({ type: "response.cancel" }));
             }
             return;
         }
-
 
         // User stopped speaking
         if (t === "input_audio_buffer.speech_stopped") {
@@ -321,14 +313,12 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             return;
         }
 
-
         // Log any response failures or cancellations and reset state so the model can respond to the next user input
         if (t === "response.failed") {
             console.warn(`[openai] response ${t}:`, serverEvent);
             pendingResponses.delete(serverEvent.response?.id);
             return;
         }
-
 
         // Clear any pending response state so the model can respond to the next user input without thinking there's still a pending response
         if (t === "response.cancelled") {
@@ -344,8 +334,6 @@ wss.on("connection", async (twilioWs: WebSocket) => {
             pendingResponses.clear();
             return;
         }
-
-
 
         // Fallback: sometimes tool calls appear at response.done instead of output_item.done,
         // so we check for any pending tool calls here as well to be safe
@@ -374,9 +362,8 @@ wss.on("connection", async (twilioWs: WebSocket) => {
 
 
 
-
     // streaming media from Twilio -> OpenAI
-    twilioWs.on("message", (data) => {
+    connection.on("message", (data) => {
         const raw = typeof data === "string" ? data : data.toString("utf8");
         const event = safeJsonParse<TwilioInboundEvent | any>(raw);
         if (!event) {
@@ -385,9 +372,9 @@ wss.on("connection", async (twilioWs: WebSocket) => {
         }
 
         if (event.event === "start") {
-            streamSid = event.start?.streamSid ?? null;
+            connection.setId(event.start?.streamSid);
             callSid = event.start?.callSid ?? null;
-            console.log("[twilio] start streamSid:", streamSid, "callSid:", callSid);
+            console.log("[twilio] start streamSid:", connection.id, "callSid:", callSid);
             console.log("[twilio] mediaFormat:", event.start?.mediaFormat);
             return;
         }
@@ -409,15 +396,35 @@ wss.on("connection", async (twilioWs: WebSocket) => {
     });
 
     // Log and close on Twilio WS errors
-    twilioWs.on("error", (err) => {
+    connection.on("error", (err) => {
         console.error("[twilio ws] error:", err);
         closeAll("twilio error");
     });
 
     // Cleanup if either side closes
-    twilioWs.on("close", () => closeAll("twilio close"));
+    connection.on("close", () => closeAll("twilio close"));
     openaiWs.on("close", () => closeAll("openai close"));
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+wss.on("connection", (ws: WebSocket) => {
+    console.log("New Twilio WebSocket connection established.");
+    const twilioConnection = new TwilioConnection(ws);
+    handleConnection(twilioConnection);
 });
+
+
 
 
 // Start the server
