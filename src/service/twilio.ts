@@ -1,6 +1,8 @@
 import twilio from "twilio";
 import Connection from "./Connection";
 import { WebSocket } from "ws";
+import { safeJsonParse } from "../utils";
+import { TwilioInboundEvent } from "./types";
 
 export interface TwilioCallServiceConfig {
     accountSid: string;
@@ -25,44 +27,71 @@ export class TwilioCallService {
 
 
 
-export class TwilioConnection implements Connection {
-    public id: string | null | undefined;
-    public websocket: WebSocket;
+export class TwilioConnection extends Connection {
 
-    constructor(websocket: WebSocket, id?: string | null) {
-        this.id = id;
-        this.websocket = websocket;
+    private registry: Map<string, (data: any) => void> = new Map();
+
+
+
+
+    onStart(listener: (data: any) => void) {
+        this.registerEvent("start", listener);
     }
 
-    setId(id: string) {
-        this.id = id
+    onMedia(listener: (data: any) => void) {
+        this.registerEvent("media", (data) => listener(data.media?.payload));
     }
 
-    get ready() {
-        return this.websocket.readyState === WebSocket.OPEN && typeof this.id == "string";
+    onStop(listener: (data: any) => void) {
+        this.registerEvent("stop", listener);
     }
 
-    on(event: "message" | "close" | "error", listener: (data: any) => void) {
-        this.websocket.on(event, listener);
+
+
+
+    init() {
+        this.on("message", (data) => {
+            const raw = typeof data === "string" ? data : data.toString("utf8");
+            const event = safeJsonParse<TwilioInboundEvent | any>(raw);
+            if (!event) {
+                console.warn("[twilio] received non-json message:", raw);
+                return;
+            }
+            const listener = this.registry.has(event.event) ? this.registry.get(event.event) : null;
+            if (listener) {
+                try {
+                    listener(event);
+                } catch (e) {
+                    console.warn("[twilio] received event with unserializable data");
+                }
+            } else {
+                console.warn("[twilio] no listener for event:", event.event);
+            }
+        });
     }
 
-    close(code?: number, reason?: any) {
-        this.websocket.close(code, reason);
+    private registerEvent(event: "start" | "media" | "stop" | string, listener: (data: any) => void) {
+        this.registry.set(event, listener);
     }
 
-    send(message: Record<string, any>) {
-        this.websocket.send(JSON.stringify(message));
+
+    public onError(listener: (data: any) => void) {
+        this.on("error", listener);
     }
 
-    stream(bytes: any) {
+    public onClose(listener: (data: any) => void): void {
+        this.on("close", listener);
+    }
+
+    sendMedia(bytes: any) {
         this.send({
-            streamSid: this.id,
+            streamSid: this.getId(),
             event: "media",
             media: { payload: bytes },
         })
     }
 
     clear() {
-        this.send({ event: "clear", streamSid: this.id })
+        this.send({ event: "clear", streamSid: this.getId() })
     }
 }

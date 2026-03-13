@@ -12,6 +12,49 @@ export interface ToolDeps {
 
 
 
+export function createOrderTools(deps: ToolDeps) {
+    return {
+        async getOrderDetails(orderId: string): Promise<ToolResult<Job>> {
+            try {
+                if (!orderId) throw new AppError("Missing order_id", "error", "MISSING_ORDER_ID");
+                const order = await deps.frappe.getDoc<Job>("Order", orderId, ["*"]);
+                return { status: "ok", data: order };
+            } catch (e: any) {
+                return {
+                    status: "error",
+                    message: `Failed to retrieve order details for order_id: ${orderId}`,
+                    code: e?.code ?? "GET_ORDER_DETAILS_FAILED",
+                    details: e?.message ?? String(e),
+                };
+            }
+        },
+
+
+
+        async updateOrderAddress(orderId: string, newAddress: string): Promise<ToolResult<Job>> {
+            try {
+            if (!orderId) throw new AppError("Missing order_id", "error", "MISSING_ORDER_ID");
+            if (!newAddress) throw new AppError("Missing new address", "error", "MISSING_NEW_ADDRESS");
+            const order = await deps.frappe.getDoc<Job>("Order", orderId, ["*"]);
+            if (order.status === "shipped") {
+                throw new AppError("Cannot update address for shipped orders", "error", "ORDER_ALREADY_SHIPPED");
+            }
+            const updatedOrder = await deps.frappe.updateDoc<Job>("Order", orderId, { address: newAddress });
+            return { status: "ok", data: updatedOrder };
+            } catch (e: any) {
+            return {
+                status: "error",
+                message: `Failed to update address for order_id: ${orderId}`,
+                code: e?.code ?? "UPDATE_ORDER_ADDRESS_FAILED",
+                details: e?.message ?? String(e),
+            };
+            }
+        },
+
+
+    };
+}
+
 
 export function createJobTools(deps: ToolDeps) {
 

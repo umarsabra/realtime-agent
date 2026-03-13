@@ -17,11 +17,16 @@ export class FrappeClient {
         return { Authorization: `token ${this.cfg.apiKey}:${this.cfg.apiSecret}` };
     }
 
+    private resourceUrl(doctype: string, name?: string) {
+        const base = `${this.cfg.baseUrl}/api/resource/${encodeURIComponent(doctype)}`;
+        return name ? `${base}/${encodeURIComponent(name)}` : base;
+    }
+
 
 
 
     async getDoc<T>(doctype: string, name: string, fields: string[] = ["*"]): Promise<T> {
-        const url = `${this.cfg.baseUrl}/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(name)}`;
+        const url = this.resourceUrl(doctype, name);
 
         const res = await httpJson<FrappeResourceResponse<T>>(url, {
             method: "GET",
@@ -32,6 +37,31 @@ export class FrappeClient {
         });
 
         return res.data;
+    }
+
+    async updateDoc<T>(doctype: string, name: string, values: Partial<T>): Promise<T> {
+        const url = this.resourceUrl(doctype, name);
+
+        const res = await httpJson<FrappeResourceResponse<T>>(url, {
+            method: "PUT",
+            headers: this.authHeader,
+            body: values,
+            timeoutMs: this.cfg.timeoutMs ?? 10_000,
+            retries: this.cfg.retries ?? 1,
+        });
+
+        return res.data;
+    }
+
+    async deleteDoc(doctype: string, name: string): Promise<void> {
+        const url = this.resourceUrl(doctype, name);
+
+        await httpJson(url, {
+            method: "DELETE",
+            headers: this.authHeader,
+            timeoutMs: this.cfg.timeoutMs ?? 10_000,
+            retries: this.cfg.retries ?? 1,
+        });
     }
 
 
@@ -47,7 +77,7 @@ export class FrappeClient {
             order_by?: string;
         } = {}
     ): Promise<T[]> {
-        const url = `${this.cfg.baseUrl}/api/resource/${encodeURIComponent(doctype)}`;
+        const url = this.resourceUrl(doctype);
 
         const query: Record<string, string | number | undefined> = {
             fields: JSON.stringify(params.fields ?? ["*"]),

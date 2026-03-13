@@ -13,6 +13,8 @@ import { safeJsonParse } from "./utils";
 import { TwilioInboundEvent } from "./service/types";
 import Connection from "./service/Connection";
 import { TwilioConnection } from "./service/twilio";
+import { connectAri } from "./service/ari";
+import { AsteriskConnection } from "./service/asterisk";
 
 
 
@@ -61,6 +63,15 @@ const wss = new WebSocketServer({ server, path: "/media" });
 
 
 
+
+
+
+
+wss.on("connection", (ws: WebSocket) => {
+    console.log("New Asterisk WebSocket connection established.");
+    const connection = new AsteriskConnection(ws);
+    handleConnection(connection);
+});
 
 
 
@@ -273,7 +284,8 @@ const handleConnection = async (connection: Connection) => {
         ) {
             const audioB64 = serverEvent.delta as string | undefined;
             if (audioB64) {
-                connection.stream(audioB64);
+                const audioBuffer = Buffer.from(audioB64, "base64");
+                connection.sendMedia(audioBuffer);
             }
             return;
         }
@@ -360,49 +372,45 @@ const handleConnection = async (connection: Connection) => {
 
 
 
+    // When Twilio signals the start of the stream, we save the callSid for later use and log the media format. In production, you might want to implement more robust handling of different media formats or other stream parameters.
+    connection.onStart((data) => {
+        connection.setId(data.start?.streamSid);
+        connection.setCallId(data.start?.callSid);
+        console.log("[twilio] start streamSid:", connection.getId(), "callSid:", callSid);
+        console.log("[twilio] mediaFormat:", data.start?.mediaFormat);
+    });
 
 
-    // streaming media from Twilio -> OpenAI
-    connection.on("message", (data) => {
-        const raw = typeof data === "string" ? data : data.toString("utf8");
-        const event = safeJsonParse<TwilioInboundEvent | any>(raw);
-        if (!event) {
-            console.warn("[twilio] received non-json message:", raw);
-            return;
-        }
 
-        if (event.event === "start") {
-            connection.setId(event.start?.streamSid);
-            callSid = event.start?.callSid ?? null;
-            console.log("[twilio] start streamSid:", connection.id, "callSid:", callSid);
-            console.log("[twilio] mediaFormat:", event.start?.mediaFormat);
-            return;
-        }
-
-        if (event.event === "media") {
-            const payload = event.media?.payload;
-            // send audio payloads from Twilio directly into the OpenAI WS as they arrive
-            if (payload && openaiWs.readyState === WebSocket.OPEN) {
-                openaiWs.send(JSON.stringify({ type: "input_audio_buffer.append", audio: payload }));
-            }
-            return;
-        }
-
-        if (event.event === "stop") {
-            console.log("[twilio] stop");
-            closeAll("twilio stop");
-            return;
+    // When we receive media from Twilio, we stream it directly to OpenAI as it arrives for the most real-time experience. In production, you might want to implement buffering and handle backpressure more robustly.
+    connection.onMedia((buffer) => {
+        if (buffer && openaiWs.readyState === WebSocket.OPEN) {
+            openaiWs.send(
+                JSON.stringify({
+                    type: "input_audio_buffer.append",
+                    audio: buffer.toString("base64"),
+                })
+            );
         }
     });
 
+    // When Twilio signals the end of the stream, we close the OpenAI WS connection and clean up. In production, you might want to implement more graceful shutdown logic or allow the model to finish its response before closing.
+    connection.onStop(() => {
+        console.log("[twilio] stop");
+        closeAll("twilio stop");
+    });
+
     // Log and close on Twilio WS errors
-    connection.on("error", (err) => {
+    connection.onError((err) => {
         console.error("[twilio ws] error:", err);
         closeAll("twilio error");
     });
 
+
     // Cleanup if either side closes
-    connection.on("close", () => closeAll("twilio close"));
+    connection.onClose(() => closeAll("twilio close"));
+
+
     openaiWs.on("close", () => closeAll("openai close"));
 }
 
@@ -411,18 +419,10 @@ const handleConnection = async (connection: Connection) => {
 
 
 
-
-
-
-
-
-
-
-wss.on("connection", (ws: WebSocket) => {
-    console.log("New Twilio WebSocket connection established.");
-    const twilioConnection = new TwilioConnection(ws);
-    handleConnection(twilioConnection);
+connectAri().catch((err) => {
+    console.error("Error connecting to Asterisk ARI:", err);
 });
+
 
 
 
