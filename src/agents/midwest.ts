@@ -44,7 +44,6 @@ const twilioClient =
 
 
 
-
 export function createJobTools(deps: ToolDeps) {
     return {
         async getJobDetails({ job_id: jobId }: { job_id: string }): Promise<ToolResult<Job>> {
@@ -89,9 +88,6 @@ export function createJobTools(deps: ToolDeps) {
 }
 
 const jobTools = createJobTools({ frappe, twilio: twilioClient });
-export const getJobDetails = jobTools.getJobDetails;
-export const getJobUpdates = jobTools.getJobUpdates;
-
 
 const tools: AgentTool[] = [
     {
@@ -115,7 +111,7 @@ const tools: AgentTool[] = [
             },
             required: ["job_id"],
         },
-        execute: (args) => getJobUpdates(args as { job_id: string; stage?: string }),
+        execute: (args) => jobTools.getJobUpdates(args as { job_id: string; stage?: string }),
         onSuccess: ({ agent, result, args }) => {
             agent.sendResponseCreate("Tell the caller the latest updates on their job in plain English.");
         },
@@ -135,14 +131,12 @@ const tools: AgentTool[] = [
             },
             required: ["job_id"],
         },
-        execute: (args) => getJobDetails(args as { job_id: string }),
+        execute: (args) => jobTools.getJobDetails(args as { job_id: string }),
         onSuccess: ({ agent, result, args }) => {
             agent.sendResponseCreate("Tell the caller the details of their job in plain English.");
         },
     }
 ];
-
-
 
 const instructions = `**Persona:**
 You are Wendy. You work at Midwest Solutions Inc (the solar place). You aren’t a "virtual assistant"—you’re just Wendy. You’re chill, a little blunt, and definitely not a corporate robot. You talk like you’ve been working here for five years and you’re probably on your second cup of coffee.
