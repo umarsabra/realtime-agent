@@ -1,81 +1,96 @@
-import Connection from "./Connection";
-import ari from "ari-client";
+import Connection from "../core/Connection";
+import { WebSocket } from "ws";
+import { safeJsonParse } from "../utils";
 
 
+type ListenerCallback = (args?: any) => void;
+type AsteriskControlEvent = {
+    event: string;
+    connection_id?: string;
+    channel_id?: string;
+    channel?: string;
+    [key: string]: unknown;
+};
 
+type ListenerType = "close" | "error" | "open" | "message";
 export class AsteriskConnection extends Connection {
-
-    private client: ari.Client | null = null;
     private initialized = false;
-    private registry: Map<string, (data: any) => void> = new Map();
+    private listeners = new Map<string, ListenerCallback[]>();
 
 
 
-
-    private async connectAri() {
-        const client = await ari.connect(
-            "http://192.168.1.58:8088",
-            "express",
-            "supersecret"
-        );
-
-        client.on("StasisStart", async (event, channel) => {
-            console.log("StasisStart:", channel.name, channel.id);
-
-            // Ignore the external media websocket leg
-            if (channel.name?.startsWith("WebSocket/")) {
-                return;
+    public on(eventType: ListenerType, callback: ListenerCallback) {
+        this.registerListener(eventType, callback);
+    }
+    private executeListener(eventType: string, args?: any) {
+        const listeners = this.listeners.get(eventType) ?? [];
+        listeners.forEach((callback) => {
+            try {
+                callback(args)
+            } catch (err) {
+                console.error(`[listener error] eventType: ${eventType} callback threw an error:`, err);
             }
-
-            // Optional: also ignore Local/ or other helper channels if you use them later
-            // if (channel.name?.startsWith("Local/")) return;
-
-            // Only now create bridge + external media
-            const bridge = await client.bridges.create({ type: "mixing" });
-            await bridge.addChannel({ channel: channel.id });
-
-            const media = await client.channels.externalMedia({
-                app: "realtime-ai-agent",
-                external_host: "express",
-                transport: "websocket",
-                encapsulation: "none",
-                format: "ulaw",
-                direction: "both",
-            });
-
-            await bridge.addChannel({ channel: media.id });
         });
-
-        client.start("realtime-ai-agent");
-        this.client = client;
+    }
+    private registerListener(eventType: string, callback: ListenerCallback) {
+        const existing = this.listeners.get(eventType) ?? [];
+        this.listeners.set(eventType, [...existing, callback]);
     }
 
 
 
 
 
+    private onMessage(data: any, isBinary: boolean) {
+        // if message is binary, it's audio data from the external media channel
+        if (isBinary) {
+            const audio = Buffer.isBuffer(data) ? data : Buffer.from(data as any);
+            this.executeListener("audio", audio);
+            return;
+        }
+
+        const raw = Buffer.isBuffer(data) ? data.toString("utf8") : data.toString();
+        const event = this.parseControlMessage(raw);
+        if (!event) {
+            console.warn("[asterisk] received unknown control message:", raw);
+            return;
+        }
+
+        if (event.event === "MEDIA_START") {
+            if (typeof event.connection_id === "string") {
+                this.setId(event.connection_id);
+            }
+            if (typeof event.channel_id === "string") {
+                this.setCallId(event.channel_id);
+            }
+            this.executeListener("start", event);
+            return;
+        }
+
+        this.executeListener("message", event);
+
+    }
+
     init() {
         if (this.initialized) return;
 
         this.socket.on("message", (data, isBinary) => {
-            if (isBinary) {
-                const audio = Buffer.isBuffer(data) ? data : Buffer.from(data as any);
-                const listener = this.registry.has("media") ? this.registry.get("media") : null;
-                if (listener) listener(audio);
-            }
+            this.onMessage(data, isBinary);
         });
 
-
-        this.socket.on("close", (data) => {
-            const listener = this.registry.has("close") ? this.registry.get("close") : null;
-            if (listener) listener(data);
+        this.socket.on("close", (code, reason) => {
+            const payload = {
+                code,
+                reason: reason.toString("utf8"),
+            };
+            this.executeListener("stop", payload);
+            this.executeListener("close", payload);
         });
 
-        this.socket.on("error", (data) => {
-            const listener = this.registry.has("error") ? this.registry.get("error") : null;
-            if (listener) listener(data);
+        this.socket.on("error", (err) => {
+            this.executeListener("error", err);
         });
-        this.connectAri();
+
         this.initialized = true;
     }
 
@@ -84,22 +99,19 @@ export class AsteriskConnection extends Connection {
 
 
     public onStart(listener: (data: any) => void): void {
-        this.registerEvent("start", listener);
+        this.registerListener("start", listener);
     }
     public onError(listener: (data: any) => void): void {
-        this.registerEvent("error", listener);
+        this.registerListener("error", listener);
     }
     public onClose(listener: (data: any) => void): void {
-        this.registerEvent("close", listener);
+        this.registerListener("close", listener);
     }
     public onStop(listener: (data: any) => void): void {
-        this.registerEvent("stop", listener);
+        this.registerListener("stop", listener);
     }
     public onMedia(listener: (data: Buffer) => void): void {
-        this.registerEvent("media", listener);
-    }
-    private registerEvent(event: string, listener: (data: any) => void) {
-        this.registry.set(event, listener);
+        this.registerListener("audio", listener);
     }
 
 
@@ -112,5 +124,62 @@ export class AsteriskConnection extends Connection {
         this.socket.send(bytes, { binary: true });
     }
 
+    clear(): void {
+        if (this.socket.readyState !== WebSocket.OPEN) return;
+        this.socket.send("FLUSH_MEDIA");
+    }
 
-} 
+    close(code?: number, reason?: any): void {
+        if (
+            this.socket.readyState !== WebSocket.OPEN &&
+            this.socket.readyState !== WebSocket.CONNECTING
+        ) {
+            return;
+        }
+
+        if (this.socket.readyState === WebSocket.OPEN) {
+            try {
+                this.socket.send("HANGUP");
+            } catch (err) {
+                console.warn("[asterisk] failed to send HANGUP before closing:", err);
+            }
+        }
+
+        this.socket.close(code, reason);
+    }
+
+    private parseControlMessage(raw: string): AsteriskControlEvent | null {
+        const json = safeJsonParse<Record<string, unknown>>(raw);
+        if (json && typeof json === "object") {
+            const eventName =
+                typeof json.event === "string"
+                    ? json.event
+                    : typeof json.type === "string"
+                        ? json.type
+                        : null;
+
+            if (!eventName) return null;
+
+            return {
+                ...json,
+                event: eventName,
+            } as AsteriskControlEvent;
+        }
+
+        const [event, ...parts] = raw.trim().split(/\s+/);
+        if (!event) return null;
+
+        const parsed: AsteriskControlEvent = { event };
+        for (const part of parts) {
+            const separatorIndex = part.indexOf(":");
+            if (separatorIndex <= 0) continue;
+
+            const key = part.slice(0, separatorIndex);
+            const value = part.slice(separatorIndex + 1);
+            parsed[key] = value;
+        }
+
+        return parsed;
+    }
+
+}

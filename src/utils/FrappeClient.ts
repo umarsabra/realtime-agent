@@ -1,5 +1,22 @@
 import { httpJson } from "./http";
-import type { FrappeListResponse, FrappeResourceResponse } from "../service/types";
+import { TwilioCallService } from "../service/twilio";
+
+
+export type FrappeResourceResponse<T> = {
+    data: T;
+};
+
+export type FrappeListResponse<T> = {
+    data: T[];
+};
+
+
+export interface ToolDeps {
+    frappe: FrappeClient;
+    twilio?: TwilioCallService; // optional in dev
+}
+
+
 
 export interface FrappeClientConfig {
     baseUrl: string; // https://app.midwestsolutions.com

@@ -1,12 +1,26 @@
 import "dotenv/config";
-import { ToolDeps } from "../service/frappe";
 import { AgentTool } from "../service/openai";
 import { TwilioCallService } from "../service/twilio";
-import { Job, Update } from "../service/types";
-import { AppError } from "../utils/error";
-import { FrappeClient } from "../utils/FrappeClient";
-import { ToolResult } from "../utils/types";
 
+
+import { FrappeClient, ToolDeps } from "../utils/FrappeClient";
+import { AppError } from "../utils";
+import { ToolResult } from "../core/Agent";
+
+
+// You can expand these types as you learn your real Job/Update schema.
+export type Job = Record<string, unknown> & { name?: string };
+export type Update = {
+    name?: string;
+    job: string;
+    owner: string;
+    reference_doctype?: string;
+    reference_name?: string;
+    creation: string | Date;
+    content: string;
+}
+
+export type GetJobArgs = { job_id: string };
 
 const FRAPPE_API_KEY = process.env.FRAPPE_API_KEY ?? "";
 const FRAPPE_API_SECRET = process.env.FRAPPE_API_SECRET ?? "";

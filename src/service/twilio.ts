@@ -1,8 +1,15 @@
 import twilio from "twilio";
-import Connection from "./Connection";
+import Connection from "../core/Connection";
 import { WebSocket } from "ws";
 import { safeJsonParse } from "../utils";
-import { TwilioInboundEvent } from "./types";
+
+export type TwilioInboundEvent =
+    | { event: "start"; start?: { streamSid?: string; callSid?: string; mediaFormat?: unknown } }
+    | { event: "media"; media?: { payload?: string } }
+    | { event: "stop" }
+    | { event: string;[k: string]: unknown };
+
+
 
 export interface TwilioCallServiceConfig {
     accountSid: string;

@@ -1,6 +1,6 @@
 import { safeJsonParse } from "../utils";
 import { WebSocket } from "ws";
-import { Tool } from "../utils/types";
+import { Tool } from "../core/Agent";
 
 
 const noop = (arg?: any) => undefined;
@@ -10,12 +10,12 @@ const noop = (arg?: any) => undefined;
 
 
 enum OpenAIEventType {
-    SESSION_UPDATED = "session_updated",
-    SESSION_CREATED = "session_created",
+    SESSION_UPDATED = "session.updated",
+    SESSION_CREATED = "session.created",
 
 
     RESPONSE_DONE = "response.done",
-    RESPONSE_CREATED = "response_created",
+    RESPONSE_CREATED = "response.created",
     RESPONSE_CANCELLED = "response.cancelled",
     RESPONSE_AUDIO_DELTA = "response.audio.delta",
     RESPONSE_FAILED = "response.failed",
@@ -111,6 +111,7 @@ export class OpenAIAgent {
         this.TOKEN = token;
         this.onAudioBuffer = onAudioBuffer;
         this.onUserStartedSpeaking = onUserStartedSpeaking;
+        this.connect();
     }
 
 
@@ -124,13 +125,13 @@ export class OpenAIAgent {
         });
 
         this.socket.on("open", () => {
+            this.send(this.build());
             this.executeListener("open");
-            this.send(JSON.stringify(this.build()));
         });
 
         this.socket.on("error", (err) => {
-            this.executeListener("error");
             console.error("[openai ws] error:", err);
+            this.executeListener("error");
             this.close()
         });
 
@@ -143,21 +144,22 @@ export class OpenAIAgent {
             console.warn("[openai] cannot send message, socket not initialized:", data);
             return;
         }
-        if (!this.ready) {
+        if (this.socket.readyState !== WebSocket.OPEN) {
             console.warn("[openai] cannot send message, socket not open:", data);
             return;
         }
-        this.send(JSON.stringify(data));
+        const payload = typeof data === "string" ? data : JSON.stringify(data);
+        this.socket.send(payload);
     }
 
 
     public sendAudio(buffer?: Buffer) {
         if (!buffer) return;
         this.send(
-            JSON.stringify({
+            {
                 type: "input_audio_buffer.append",
                 audio: buffer.toString("base64"),
-            })
+            }
         );
     }
 
@@ -171,10 +173,10 @@ export class OpenAIAgent {
             // we need to update the session to use g711_ulaw for compatibility with Twilio
             console.warn("[openai] unexpected session update:", session);
             this.send(
-                JSON.stringify({
+                {
                     type: "session.update",
                     session: { input_audio_format: "g711_ulaw", output_audio_format: "g711_ulaw" },
-                })
+                }
             );
             return;
         }
@@ -184,7 +186,7 @@ export class OpenAIAgent {
         if (this.sessionReady && !this.assistantStarted) {
             // Seed a user message to make the assistant greet immediately
             this.send(
-                JSON.stringify({
+                {
                     type: "conversation.item.create",
                     item: {
                         type: "message",
@@ -197,7 +199,7 @@ export class OpenAIAgent {
                             },
                         ],
                     },
-                })
+                }
             );
             this.sendResponseCreate("Greet the caller and ask how you can help.");
             this.assistantStarted = true;
@@ -281,7 +283,7 @@ export class OpenAIAgent {
         if (type === OpenAIEventType.INPUT_AUDIO_BUFFER_SPEECH_STARTED) {
             console.log("[openai] user started speaking");
             if (this.pendingResponses.size > 0) {
-                this.send(JSON.stringify({ type: "response.cancel" }));
+                this.send({ type: "response.cancel" });
             }
             this.onUserStartedSpeaking && this.onUserStartedSpeaking()
             return;
@@ -303,13 +305,12 @@ export class OpenAIAgent {
         if (type === OpenAIEventType.RESPONSE_CANCELLED) {
             console.log("[openai] response cancelled, cleared pending responses and in-flight audio", event);
             const itemId = event?.response?.output?.[0]?.id;
-            const request = JSON.stringify({
+            this.send({
                 type: "conversation.item.truncate",
                 item_id: itemId,
                 content_index: 0,
                 audio_end_ms: 1500 // truncate audio after 1.5 seconds
             });
-            this.send(request);
             this.pendingResponses.clear();
             return;
         }
@@ -373,14 +374,14 @@ export class OpenAIAgent {
         // Always send tool output back to OpenAI
         if (this.ready) {
             this.send(
-                JSON.stringify({
+                {
                     type: "conversation.item.create",
                     item: {
                         type: "function_call_output",
                         call_id: callId,
                         output: JSON.stringify(result),
                     },
-                })
+                }
             );
         }
 
@@ -462,22 +463,16 @@ export class OpenAIAgent {
 
 
     public sendResponseCreate(instructions: string) {
-        if (this.ready) {
-            console.warn("[bridge] cannot send response.create, OpenAI WS not open");
-            return;
-        }
-
         // Prevent sending a new response.create if there's already a pending response for the current call
         if (this.pendingResponses.size > 0) {
             console.warn("[bridge] already have pending response for call_ids:", Array.from(this.pendingResponses.keys()));
             return;
         }
-
         this.send(
-            JSON.stringify({
+            {
                 type: "response.create",
                 response: { instructions },
-            })
+            }
         );
         console.log("[bridge] sent response.create with instructions:", instructions);
     }
@@ -495,12 +490,16 @@ export class OpenAIAgent {
 
 
     public close() {
-        this.ready && this.socket && this.socket.close()
+        if (this.socket && this.socket.readyState !== WebSocket.CLOSED) {
+            this.socket.close();
+        }
         this.executeListener("close");
     }
 
+
+
     public get ready() {
-        return this.socket && this.socket.readyState == WebSocket.OPEN;
+        return Boolean(this.socket && this.socket.readyState === WebSocket.OPEN && this.sessionReady);
     }
 
 

@@ -7,8 +7,6 @@ export default abstract class Connection {
 
 
 
-
-
     constructor(websocket: WebSocket, id?: string | null) {
         this.id = id
         this.socket = websocket;
@@ -86,13 +84,6 @@ export default abstract class Connection {
 
 
 
-
-
-
-
-
-
-
     /**
      * Send a message to the connection. The implementation depends on the connection type. For example, for Twilio, it will send a JSON message through the WebSocket, while for Asterisk, it might write directly to the socket or send a specific command.
      * @param message 
@@ -110,7 +101,12 @@ export default abstract class Connection {
      * @param reason 
      */
     close(code?: number, reason?: any) {
-        this.ready && this.socket.close(code, reason);
+        if (
+            this.socket.readyState === WebSocket.OPEN ||
+            this.socket.readyState === WebSocket.CONNECTING
+        ) {
+            this.socket.close(code, reason);
+        }
     }
 
 
@@ -159,7 +155,6 @@ export default abstract class Connection {
 
 
 }
-
 
 
 

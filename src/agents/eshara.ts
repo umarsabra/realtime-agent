@@ -1,11 +1,10 @@
-import { ToolDeps } from "../service/frappe";
-import { AgentTool, OpenAIAgent } from "../service/openai";
-import { TwilioCallService } from "../service/twilio";
-import { AppError } from "../utils/error";
-import { FrappeClient } from "../utils/FrappeClient";
 import "dotenv/config";
-import { ToolResult } from "../utils/types";
+import { AgentTool } from "../service/openai";
+import { TwilioCallService } from "../service/twilio";
 
+import { FrappeClient, ToolDeps } from "../utils/FrappeClient";
+import { AppError } from "../utils";
+import { ToolResult } from "../core/Agent";
 const FRAPPE_API_KEY = process.env.FRAPPE_API_KEY ?? "";
 const FRAPPE_API_SECRET = process.env.FRAPPE_API_SECRET ?? "";
 const FRAPPE_BASE_URL = process.env.FRAPPE_BASE_URL ?? "https://app.midwestsolutions.com";
