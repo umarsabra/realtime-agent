@@ -3,32 +3,17 @@ import http from "http";
 import express, { Request, Response } from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import twilio from "twilio";
-
-
-// Your tool implementations (you already have these in Python)
-// Make these return plain JSON-serializable objects.
-import {
-    createOrderTicket,
-    getJobDetails,
-    getJobUpdates,
-    getOrderDetails,
-    updateOrderAddress,
-    endCall,
-} from "./tools";
-import { buildSessionUpdate } from "./utils/model";
-import { safeJsonParse } from "./utils";
-import { TwilioInboundEvent } from "./service/types";
 import Connection from "./service/Connection";
-import { TwilioConnection } from "./service/twilio";
 import { connectAri } from "./service/ari";
 import { AsteriskConnection } from "./service/asterisk";
+import { tools, instructions } from "./agents/eshara";
+import { OpenAIAgent } from "./service/openai";
 
 
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-realtime";
 const PUBLIC_WSS_URL = process.env.PUBLIC_WSS_URL ?? ""; // e.g. wss://your-domain.com/media
-
 const PORT = Number(process.env.PORT ?? 4000);
 
 const app = express();
@@ -69,8 +54,6 @@ const wss = new WebSocketServer({ server, path: "/media" });
 
 
 
-
-
 wss.on("connection", (ws: WebSocket) => {
     console.log("New Asterisk WebSocket connection established.");
     const connection = new AsteriskConnection(ws);
@@ -84,348 +67,50 @@ const handleConnection = async (connection: Connection) => {
         connection.close(1011, "Missing OPENAI_API_KEY");
         return;
     }
-    let callSid: string | null = null;
 
-    const openaiWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=${encodeURIComponent(OPENAI_MODEL)}`, {
-        headers: {
-            Authorization: `Bearer ${OPENAI_API_KEY}`,
-            "OpenAI-Beta": "realtime=v1",
-        },
-    });
+    const agent = new OpenAIAgent({
+        name: "Mariam",
+        instructions,
+        token: process.env.OPENAI_API_KEY ?? "",
+        onAudioBuffer: (buffer) => connection.sendAudio(buffer),
+        onUserStartedSpeaking: () => connection.clear(),
+        model: OPENAI_MODEL,
+    })
+
+    agent.registerTools(tools);
+    agent.connect();
 
 
-
-    const closeAll = (reason?: string) => {
+    const close = (reason?: string) => {
         if (reason) console.log("[bridge] closing:", reason);
-        try {
-            if (connection.ready) connection.close();
-        } catch (err) {
-            console.error("Error closing twilio ws:", err);
-        }
-        try {
-            if (openaiWs.readyState === WebSocket.OPEN) openaiWs.close();
-        } catch (err) {
-            console.error("Error closing openai ws:", err);
-        }
+        connection.close();
+        agent.close();
     };
 
 
-    const callArgsBuffer = new Map<string, string>();
-    const pendingResponses = new Map<string, boolean>(); // track in-flight responses by call_id to prevent overlapping responses for the same tool call
-    let assistantStarted = false;
-    let sessionReady = false;
-
-
-    async function handleFunctionCall(callId: string | undefined, fnName: string | undefined, argsJson: string) {
-        if (!callId || !fnName) return;
-
-        let args: any = {};
-        const buffered = callArgsBuffer.get(callId);
-        const effectiveArgsJson =
-            (argsJson && argsJson !== "{}" ? argsJson : buffered) ?? argsJson ?? "{}";
-
-        try {
-            args = JSON.parse(effectiveArgsJson || "{}");
-        } catch {
-            args = {};
-        }
-
-        let result: any;
-        try {
-            if (fnName === "create_order_ticket") {
-                result = await createOrderTicket({
-                    subject: String(args.subject ?? ""),
-                    full_name: args.full_name ? String(args.full_name) : undefined,
-                    description: args.description ? String(args.description) : undefined,
-                });
-            } else if (fnName === "get_order_details") {
-                result = await getOrderDetails({ order_id: String(args.order_id ?? "") });
-            } else if (fnName === "update_order_address") {
-                result = await updateOrderAddress({
-                    order_id: String(args.order_id ?? ""),
-                    new_address: String(args.new_address ?? ""),
-                });
-            } else if (fnName === "end_call") {
-                // You can make this hang up in Twilio using REST API if you want,
-                // but for simplicity we'll just send a goodbye message and let the caller hang up
-                result = await endCall(callSid ?? "", String(args.reason ?? "caller requested"));
-            } else {
-                result = { status: "error", message: `Unknown tool: ${fnName}` };
-            }
-        } catch (e: any) {
-            result = { status: "error", message: e?.message ?? String(e) };
-        } finally {
-            console.log(`[tool call] ${fnName}(${effectiveArgsJson})`);
-        }
-
-        console.log(`[tool result] ${fnName}:`, result);
-
-        // Send tool output back to OpenAI
-        if (openaiWs.readyState === WebSocket.OPEN) {
-            openaiWs.send(
-                JSON.stringify({
-                    type: "conversation.item.create",
-                    item: {
-                        type: "function_call_output",
-                        call_id: callId,
-                        output: JSON.stringify(result),
-                    },
-                })
-            );
-        }
-
-        // cleanup buffer
-        callArgsBuffer.delete(callId);
-        // Ask the model to speak the result nicely
-        if (fnName === "create_order_ticket") {
-            sendResponseCreate("Tell the caller whether the order or shipping ticket was created, in plain English.");
-        } else if (fnName === "get_order_details") {
-            sendResponseCreate("Tell the caller the order details in plain English.");
-        } else if (fnName === "update_order_address") {
-            sendResponseCreate("Tell the caller whether the order address was updated, in plain English.");
-        }
-    }
-
-
-    function sendResponseCreate(instructions: string) {
-        if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) {
-            console.warn("[bridge] cannot send response.create, OpenAI WS not open");
-            return;
-        }
-
-        // Prevent sending a new response.create if there's already a pending response for the current call
-        if (pendingResponses.size > 0) {
-            console.warn("[bridge] already have pending response for call_ids:", Array.from(pendingResponses.keys()));
-            return;
-        }
-
-        openaiWs.send(
-            JSON.stringify({
-                type: "response.create",
-                response: { instructions },
-            })
-        );
-        console.log("[bridge] sent response.create with instructions:", instructions);
-    }
-
-
-    // send initial session update to set model, turn detection, tools, etc.
-    openaiWs.on("open", () => {
-        openaiWs.send(JSON.stringify(buildSessionUpdate()));
-    });
-
-
-    // log and close on OpenAI WS errors - you may want to implement more robust error handling and reconnection logic in production
-    openaiWs.on("error", (err) => {
-        console.error("[openai ws] error:", err);
-        closeAll("openai error");
-    });
-
-
-    // Handle incoming messages/events from OpenAI
-    openaiWs.on("message", async (data) => {
-        const raw = typeof data === "string" ? data : data.toString("utf8");
-        const serverEvent = safeJsonParse<any>(raw);
-        if (!serverEvent) return;   // ignore non-json messages
-
-        const t = serverEvent.type as string | undefined;
-
-        if (t === "error") {
-            console.error("[openai] error event:", serverEvent);
-            return;
-        }
-
-        if (t === "session.created") {
-            console.log("[openai] session started.");
-            return;
-        }
-
-        // Ensure the session is ready and using the correct audio format before we start sending audio or tool calls
-        if (t === "session.updated") {
-            const session = serverEvent?.session ?? {};
-            // Ensure audio format is mulaw/8k for Twilio
-            if (session.output_audio_format && session.output_audio_format !== "g711_ulaw") {
-                // If the model responded with a different audio format than we requested,
-                // we need to update the session to use g711_ulaw for compatibility with Twilio
-                console.warn("[openai] unexpected session update:", session);
-                openaiWs.send(
-                    JSON.stringify({
-                        type: "session.update",
-                        session: { input_audio_format: "g711_ulaw", output_audio_format: "g711_ulaw" },
-                    })
-                );
-                return;
-            }
-
-
-            sessionReady = true;
-            if (sessionReady && !assistantStarted) {
-                // Seed a user message to make the assistant greet immediately
-                openaiWs.send(
-                    JSON.stringify({
-                        type: "conversation.item.create",
-                        item: {
-                            type: "message",
-                            role: "user",
-                            content: [
-                                {
-                                    type: "input_text",
-                                    text:
-                                        "Please greet the caller in clear Egyptian Arabic, introduce yourself as Mariam from Eshara, and ask how you can help.",
-                                },
-                            ],
-                        },
-                    })
-                );
-                sendResponseCreate("Greet the caller and ask how you can help.");
-                assistantStarted = true;
-            }
-            return;
-        }
-
-        // mark the response as pending when it's created so we can track it and prevent overlapping responses for the same tool call
-        if (t === "response.created") {
-            console.log("[openai] response created: ", serverEvent.response.id);
-            pendingResponses.set(serverEvent.response.id, true);
-            return;
-        }
-
-        // Audio deltas from OpenAI -> Twilio media frames
-        if (
-            t === "response.output_audio.delta" ||
-            t === "response.audio.delta" ||
-            t === "output_audio_buffer.delta"
-        ) {
-            const audioB64 = serverEvent.delta as string | undefined;
-            if (audioB64) {
-                const audioBuffer = Buffer.from(audioB64, "base64");
-                connection.sendMedia(audioBuffer);
-            }
-            return;
-        }
-
-        // Streaming tool args {"call_id": "...", "delta": "..."}
-        if (t === "response.function_call_arguments.delta") {
-            const callId = serverEvent.call_id as string | undefined;
-            const delta = serverEvent.delta as string | undefined;
-            if (callId && delta) {
-                callArgsBuffer.set(callId, (callArgsBuffer.get(callId) ?? "") + delta);
-            }
-            return;
-        }
-
-        // Handle end of tool args - you could trigger the tool execution here if you want, but we'll wait for the function_call item completion for simplicity
-        if (t === "response.function_call_arguments.done") {
-            const callId = serverEvent.call_id as string | undefined;
-            if (callId && callArgsBuffer.has(callId)) {
-                console.log("[openai] tool args done for call_id:", callId);
-            }
-            return;
-        }
-
-        // User started speaking
-        if (t === "input_audio_buffer.speech_started") {
-            console.log("[openai] user started speaking");
-            connection.clear()
-            if (pendingResponses.size > 0) {
-                openaiWs.send(JSON.stringify({ type: "response.cancel" }));
-            }
-            return;
-        }
-
-        // User stopped speaking
-        if (t === "input_audio_buffer.speech_stopped") {
-            console.log("[openai] user stopped speaking");
-            return;
-        }
-
-        // Log any response failures or cancellations and reset state so the model can respond to the next user input
-        if (t === "response.failed") {
-            console.warn(`[openai] response ${t}:`, serverEvent);
-            pendingResponses.delete(serverEvent.response?.id);
-            return;
-        }
-
-        // Clear any pending response state so the model can respond to the next user input without thinking there's still a pending response
-        if (t === "response.cancelled") {
-            console.log("[openai] response cancelled, cleared pending responses and in-flight audio", serverEvent);
-            const itemId = serverEvent?.response?.output?.[0]?.id;
-            const request = JSON.stringify({
-                type: "conversation.item.truncate",
-                item_id: itemId,
-                content_index: 0,
-                audio_end_ms: 1500 // truncate audio after 1.5 seconds
-            });
-            openaiWs.send(request);
-            pendingResponses.clear();
-            return;
-        }
-
-        // Fallback: sometimes tool calls appear at response.done instead of output_item.done,
-        // so we check for any pending tool calls here as well to be safe
-        if (t === "response.done") {
-            if (pendingResponses.has(serverEvent.response?.id)) {
-                pendingResponses.delete(serverEvent.response.id);
-                console.log("[openai] marked response as completed for response.id:", serverEvent.response?.id);
-            }
-
-            const outputItems = serverEvent?.response?.output ?? [];
-            for (const item of outputItems) {
-                if (item?.type === "function_call") {
-                    console.warn("[openai] found function_call item at response.done")
-                    await handleFunctionCall(item.call_id, item.name, item.arguments ?? "{}");
-                }
-            }
-            return;
-        }
-
-
-        return;
-    });
-
-
-
+    agent.on("close", () => close("openai close"));
 
     // When Twilio signals the start of the stream, we save the callSid for later use and log the media format. In production, you might want to implement more robust handling of different media formats or other stream parameters.
     connection.onStart((data) => {
         connection.setId(data.start?.streamSid);
         connection.setCallId(data.start?.callSid);
-        console.log("[twilio] start streamSid:", connection.getId(), "callSid:", callSid);
-        console.log("[twilio] mediaFormat:", data.start?.mediaFormat);
     });
-
 
 
     // When we receive media from Twilio, we stream it directly to OpenAI as it arrives for the most real-time experience. In production, you might want to implement buffering and handle backpressure more robustly.
-    connection.onMedia((buffer) => {
-        if (buffer && openaiWs.readyState === WebSocket.OPEN) {
-            openaiWs.send(
-                JSON.stringify({
-                    type: "input_audio_buffer.append",
-                    audio: buffer.toString("base64"),
-                })
-            );
-        }
-    });
+    connection.onMedia((buffer) => agent.sendAudio(buffer));
+
 
     // When Twilio signals the end of the stream, we close the OpenAI WS connection and clean up. In production, you might want to implement more graceful shutdown logic or allow the model to finish its response before closing.
-    connection.onStop(() => {
-        console.log("[twilio] stop");
-        closeAll("twilio stop");
-    });
+    connection.onStop(() => close("twilio stop"));
+
 
     // Log and close on Twilio WS errors
-    connection.onError((err) => {
-        console.error("[twilio ws] error:", err);
-        closeAll("twilio error");
-    });
+    connection.onError((err) => close("twilio error"));
 
 
     // Cleanup if either side closes
-    connection.onClose(() => closeAll("twilio close"));
-
-
-    openaiWs.on("close", () => closeAll("openai close"));
+    connection.onClose(() => close("twilio close"));
 }
 
 

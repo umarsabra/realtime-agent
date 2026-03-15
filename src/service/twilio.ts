@@ -83,7 +83,7 @@ export class TwilioConnection extends Connection {
         this.on("close", listener);
     }
 
-    sendMedia(bytes: any) {
+    sendAudio(bytes: any) {
         this.send({
             streamSid: this.getId(),
             event: "media",

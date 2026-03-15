@@ -110,7 +110,7 @@ export default abstract class Connection {
      * @param reason 
      */
     close(code?: number, reason?: any) {
-        this.socket.close(code, reason);
+        this.ready && this.socket.close(code, reason);
     }
 
 
@@ -127,7 +127,7 @@ export default abstract class Connection {
      * stream media bytes to the connection. The implementation depends on the connection type. For example, for Twilio, it will send a JSON message with the media payload, while for Asterisk, it might write directly to the socket.
      * @param bytes 
      */
-    sendMedia(bytes: Buffer) {
+    sendAudio(bytes: Buffer) {
         console.warn("streaming not implemented for this connection type");
     }
 
