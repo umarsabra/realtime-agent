@@ -111,7 +111,6 @@ export class OpenAIAgent {
         this.TOKEN = token;
         this.onAudioBuffer = onAudioBuffer;
         this.onUserStartedSpeaking = onUserStartedSpeaking;
-        this.connect();
     }
 
 

@@ -4,8 +4,9 @@ import express, { Request, Response } from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import twilio from "twilio";
 import { AsteriskConnection } from "../service/asterisk";
-import { OpenAIAgent } from "../service/openai";
+import { AgentTool, OpenAIAgent } from "../service/openai";
 import { tools, instructions } from "../agents/eshara";
+import { hangupCall } from "./ari";
 
 
 
@@ -51,11 +52,52 @@ app.all("/twilio", (_req: Request, res: Response) => {
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/media" });
 
+function getEndCallReason(args?: object) {
+    const value = (args as { reason?: unknown } | undefined)?.reason;
+    return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function buildEndCallTool(scheduleHangup: (reason?: string, delayMs?: number) => void): AgentTool {
+    return {
+        type: "function",
+        name: "end_call",
+        description:
+            "End the current phone call when the caller clearly wants to finish the conversation, says goodbye, or confirms they do not need anything else.",
+        parameters: {
+            type: "object",
+            properties: {
+                reason: {
+                    type: "string",
+                    description: "Short summary of why the call is ending.",
+                },
+            },
+            required: [],
+        },
+        execute: async (args) => ({
+            status: "ok",
+            data: {
+                ending: true,
+                reason: getEndCallReason(args) ?? "caller requested to end the call",
+            },
+        }),
+        onSuccess: ({ agent, args }) => {
+            agent.sendResponseCreate(
+                "In one short Egyptian Arabic sentence, politely say goodbye"
+            );
+            scheduleHangup(
+                getEndCallReason(args) ? `agent end_call: ${getEndCallReason(args)}` : "agent end_call",
+                3000
+            );
+        },
+    };
+}
+
 
 wss.on("connection", (ws: WebSocket) => {
     console.log("New Asterisk WebSocket connection established.");
     const connection = new AsteriskConnection(ws);
     let closed = false;
+    let hangupTimer: NodeJS.Timeout | null = null;
 
     if (!OPENAI_API_KEY) {
         connection.close(1011, "Missing OPENAI_API_KEY");
@@ -70,15 +112,44 @@ wss.on("connection", (ws: WebSocket) => {
         onUserStartedSpeaking: () => connection.clear(),
         model: OPENAI_MODEL,
     })
-    agent.registerTools(tools);
 
     const close = (reason?: string) => {
         if (closed) return;
         closed = true;
+        if (hangupTimer) {
+            clearTimeout(hangupTimer);
+            hangupTimer = null;
+        }
         if (reason) console.log("[bridge] closing:", reason);
         connection.close();
         agent.close();
     };
+
+    const scheduleHangup = (reason?: string, delayMs = 2500) => {
+        if (closed || hangupTimer) return;
+        hangupTimer = setTimeout(() => {
+            hangupTimer = null;
+            const activeChannelId = connection.getCallId();
+            if (!activeChannelId) {
+                console.warn("[bridge] no active Asterisk channel id available, falling back to socket close");
+                close(reason);
+                return;
+            }
+
+            void hangupCall(activeChannelId)
+                .then(() => {
+                    if (reason) {
+                        console.log("[bridge] requested ARI hangup:", reason);
+                    }
+                })
+                .catch((err) => {
+                    console.error("[bridge] failed to hang up call via ARI:", err);
+                    close(`${reason ?? "agent end_call"} fallback close`);
+                });
+        }, delayMs);
+    };
+    agent.registerTools([...tools, buildEndCallTool(scheduleHangup)]);
+    agent.connect()
 
 
     // handle closed connections and errors from Agent WS
