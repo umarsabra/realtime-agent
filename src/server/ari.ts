@@ -22,6 +22,9 @@ function resolveCallerId(channelId: string) {
     return callerIdByMediaId.get(channelId) ?? null;
 }
 
+
+
+
 async function cleanupSession(channelId: string, reason: string) {
     const callerId = resolveCallerId(channelId);
     if (!callerId) return;
@@ -46,6 +49,10 @@ async function cleanupSession(channelId: string, reason: string) {
     }
 }
 
+
+
+
+
 export async function hangupCall(channelId: string) {
     const callerId = resolveCallerId(channelId) ?? channelId;
     const session = sessions.get(callerId);
@@ -63,6 +70,8 @@ export async function hangupCall(channelId: string) {
     console.log(`[ari] hanging up channel ${callerId} via client`);
     await clientRef.channels.hangup({ channelId: callerId });
 }
+
+
 
 export default async function connectAri() {
     const client = await ari.connect(
