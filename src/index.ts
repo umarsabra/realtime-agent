@@ -7,7 +7,14 @@ import twilio from "twilio";
 
 // Your tool implementations (you already have these in Python)
 // Make these return plain JSON-serializable objects.
-import { getJobDetails, getJobUpdates, endCall } from "./tools";
+import {
+    createOrderTicket,
+    getJobDetails,
+    getJobUpdates,
+    getOrderDetails,
+    updateOrderAddress,
+    endCall,
+} from "./tools";
 import { buildSessionUpdate } from "./utils/model";
 import { safeJsonParse } from "./utils";
 import { TwilioInboundEvent } from "./service/types";
@@ -59,9 +66,6 @@ app.all("/twilio", (_req: Request, res: Response) => {
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/media" });
-
-
-
 
 
 
@@ -128,10 +132,19 @@ const handleConnection = async (connection: Connection) => {
 
         let result: any;
         try {
-            if (fnName === "get_job_details") {
-                result = await getJobDetails(String(args.job_id ?? ""));
-            } else if (fnName === "get_job_updates") {
-                result = await getJobUpdates(String(args.job_id ?? ""), args.stage ?? undefined);
+            if (fnName === "create_order_ticket") {
+                result = await createOrderTicket({
+                    subject: String(args.subject ?? ""),
+                    full_name: args.full_name ? String(args.full_name) : undefined,
+                    description: args.description ? String(args.description) : undefined,
+                });
+            } else if (fnName === "get_order_details") {
+                result = await getOrderDetails({ order_id: String(args.order_id ?? "") });
+            } else if (fnName === "update_order_address") {
+                result = await updateOrderAddress({
+                    order_id: String(args.order_id ?? ""),
+                    new_address: String(args.new_address ?? ""),
+                });
             } else if (fnName === "end_call") {
                 // You can make this hang up in Twilio using REST API if you want,
                 // but for simplicity we'll just send a goodbye message and let the caller hang up
@@ -163,12 +176,13 @@ const handleConnection = async (connection: Connection) => {
 
         // cleanup buffer
         callArgsBuffer.delete(callId);
-
         // Ask the model to speak the result nicely
-        if (fnName === "get_job_details") {
-            sendResponseCreate("Tell the caller the job details in plain English.");
-        } else if (fnName === "get_job_updates") {
-            sendResponseCreate("Tell the caller the job updates in plain English.")
+        if (fnName === "create_order_ticket") {
+            sendResponseCreate("Tell the caller whether the order or shipping ticket was created, in plain English.");
+        } else if (fnName === "get_order_details") {
+            sendResponseCreate("Tell the caller the order details in plain English.");
+        } else if (fnName === "update_order_address") {
+            sendResponseCreate("Tell the caller whether the order address was updated, in plain English.");
         }
     }
 
@@ -257,7 +271,7 @@ const handleConnection = async (connection: Connection) => {
                                 {
                                     type: "input_text",
                                     text:
-                                        "Please greet the caller in clear American English, introduce yourself as Wendy from Midwest Solutions Inc, and ask how you can help.",
+                                        "Please greet the caller in clear Egyptian Arabic, introduce yourself as Mariam from Eshara, and ask how you can help.",
                                 },
                             ],
                         },

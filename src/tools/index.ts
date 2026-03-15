@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { FrappeClient } from "../utils/FrappeClient";
 import { TwilioCallService } from "../service/twilio";
-import { createJobTools } from "../service/frappe";
+import { createJobTools, createOrderTools } from "../service/frappe";
 
 const FRAPPE_API_KEY = process.env.FRAPPE_API_KEY ?? "";
 const FRAPPE_API_SECRET = process.env.FRAPPE_API_SECRET ?? "";
@@ -28,4 +28,18 @@ const twilioClient =
 const jobTools = createJobTools({ frappe, twilio: twilioClient });
 export const getJobDetails = jobTools.getJobDetails;
 export const getJobUpdates = jobTools.getJobUpdates;
+
+
+
+
+
+
+const orderTools = createOrderTools({ frappe, twilio: twilioClient });
+
+export const createOrderTicket = orderTools.createOrderTicket;
+export const getOrderDetails = orderTools.getOrderDetails;
+export const updateOrderAddress = orderTools.updateOrderAddress;
+
+
+
 export const endCall = jobTools.endCall;

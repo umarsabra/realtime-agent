@@ -39,6 +39,18 @@ export class FrappeClient {
         return res.data;
     }
 
+    async createDoc<T>(doctype: string, values: Partial<T>): Promise<T> {
+        const url = this.resourceUrl(doctype);
+        const res = await httpJson<FrappeResourceResponse<T>>(url, {
+            method: "POST",
+            headers: this.authHeader,
+            body: values,
+            timeoutMs: this.cfg.timeoutMs ?? 10_000,
+            retries: this.cfg.retries ?? 1,
+        });
+        return res.data;
+    }
+
     async updateDoc<T>(doctype: string, name: string, values: Partial<T>): Promise<T> {
         const url = this.resourceUrl(doctype, name);
 
