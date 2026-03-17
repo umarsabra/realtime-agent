@@ -69,12 +69,12 @@ export class AsteriskConnection extends Connection {
                 this.setId(event.connection_id);
             }
             if (typeof event.channel_id === "string") {
-                this.setCallId(ari.getCallerIdByChannelId(event.channel_id) ?? event.channel_id);
+                this.setChannelId(ari.getChannelIdByChannelId(event.channel_id) ?? event.channel_id);
             }
 
             const e = {
                 connectionId: event.connection_id,
-                callId: this.getCallId(),
+                channelId: this.getChannelId(),
                 mediaChannelId: event.channel_id,
             };
             this.executeListener("start", e);
@@ -145,20 +145,20 @@ export class AsteriskConnection extends Connection {
 
 
     public async hangup() {
-        const channelId = this.getCallId();
+        const channelId = this.getChannelId();
         if (!channelId) {
             console.warn("[asterisk] cannot hangup call: no channel id associated with connection");
             return;
         }
 
-        const session = ari.getSessionByCallerId(channelId);
+        const session = ari.getSessionByChannelId(channelId);
         if (session) {
             console.log(`[asterisk] hanging up caller channel ${channelId} via session`);
             await session.channel.hangup();
             return;
         }
 
-        console.log(`[asterisk] hanging up channel ${this.getCallId()} via client`);
+        console.log(`[asterisk] hanging up channel ${this.getChannelId()} via client`);
         await ari.getClient()?.channels.hangup({ channelId });
     }
 

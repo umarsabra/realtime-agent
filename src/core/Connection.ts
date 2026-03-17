@@ -3,7 +3,7 @@ import { WebSocket } from "ws";
 export default abstract class Connection {
     public socket: WebSocket;
     private id: string | null | undefined;
-    private callId: string | null | undefined;
+    private channelId: string | null | undefined;
 
 
 
@@ -134,8 +134,8 @@ export default abstract class Connection {
     getId() {
         return this.id;
     }
-    getCallId() {
-        return this.callId;
+    getChannelId() {
+        return this.channelId;
     }
     getSocket() {
         return this.socket;
@@ -149,12 +149,11 @@ export default abstract class Connection {
     setId(id?: string | null) {
         this.id = id
     }
-    setCallId(callId?: string | null) {
-        this.callId = callId;
+    setChannelId(channelId?: string | null) {
+        this.channelId = channelId;
     }
 
 
 }
-
 
 
