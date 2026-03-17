@@ -16,7 +16,6 @@ interface ARIClientConfig {
 type CallSession = {
     channel: ari.Channel;
     bridge: ari.Bridge;
-    mediaChannelId: string;
     media: ari.Channel | null;
 };
 
@@ -27,7 +26,6 @@ export default class ARIClient {
     private client: ari.Client | null = null;
     private config: ARIClientConfig;
     private sessions = new Map<string, CallSession>();
-    private channelIdByMediaChannelId = new Map<string, string>();
 
 
 
@@ -116,7 +114,7 @@ export default class ARIClient {
         if (!this.client) return;
 
         const channelId = channel.id;
-        const mediaChannelId = `${ARIClient.MEDIA_CHANNEL_PREFIX}${channelId}`;
+        const mediaChannelId = this.getMediaChannelId(channelId);
 
 
         let step = "answer inbound channel";
@@ -142,7 +140,6 @@ export default class ARIClient {
             this.sessions.set(channelId, {
                 channel,
                 bridge,
-                mediaChannelId,
                 media: null,
             });
 
@@ -167,7 +164,6 @@ export default class ARIClient {
             console.error(`[ari] failed to set up session for ${channelId} during "${step}":`, err);
 
             this.sessions.delete(channelId);
-            this.channelIdByMediaChannelId.delete(mediaChannelId);
 
             if (media) {
                 try {
@@ -198,12 +194,11 @@ export default class ARIClient {
             return;
         }
 
-        if (session.media?.id === mediaChannel.id && this.channelIdByMediaChannelId.has(mediaChannel.id)) {
+        if (session.media?.id === mediaChannel.id) {
             return;
         }
 
         session.media = mediaChannel;
-        this.channelIdByMediaChannelId.set(mediaChannel.id, channelId);
 
         try {
             await session.bridge.addChannel({ channel: mediaChannel.id });
@@ -228,7 +223,6 @@ export default class ARIClient {
         if (!session) return;
 
         this.sessions.delete(resolvedChannelId);
-        this.channelIdByMediaChannelId.delete(session.media?.id ?? session.mediaChannelId);
 
         console.log(`[ari] cleaning session ${resolvedChannelId}: ${reason}`);
 
@@ -236,12 +230,12 @@ export default class ARIClient {
             if (session.media) {
                 await session.media.hangup();
             } else if (this.client) {
-                await this.client.channels.hangup({ channelId: session.mediaChannelId });
+                await this.client.channels.hangup({ channelId: this.getMediaChannelId(resolvedChannelId) });
             }
         } catch (err) {
             if (!this.isAriMessage(err, "Channel not found")) {
                 console.warn(
-                    `[ari] failed to hang up external media channel ${session.media?.id ?? session.mediaChannelId}:`,
+                    `[ari] failed to hang up external media channel ${session.media?.id ?? this.getMediaChannelId(resolvedChannelId)}:`,
                     err
                 );
             }
@@ -258,7 +252,7 @@ export default class ARIClient {
 
     private resolveChannelId(inputChannelId: string) {
         if (this.sessions.has(inputChannelId)) return inputChannelId;
-        return this.channelIdByMediaChannelId.get(inputChannelId) ?? this.getChannelIdFromMediaChannelId(inputChannelId);
+        return this.getChannelIdFromMediaChannelId(inputChannelId);
     }
 
     private isAriMessage(err: unknown, message: string) {
@@ -275,6 +269,10 @@ export default class ARIClient {
     private getChannelIdFromMediaChannelId(channelId?: string | null) {
         if (!channelId?.startsWith(ARIClient.MEDIA_CHANNEL_PREFIX)) return null;
         return channelId.slice(ARIClient.MEDIA_CHANNEL_PREFIX.length) || null;
+    }
+
+    private getMediaChannelId(channelId: string) {
+        return `${ARIClient.MEDIA_CHANNEL_PREFIX}${channelId}`;
     }
 
 

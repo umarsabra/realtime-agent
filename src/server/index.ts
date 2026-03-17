@@ -57,8 +57,6 @@ const wss = new WebSocketServer({ server, path: "/media" });
 
 
 
-
-
 wss.on("connection", (ws: WebSocket) => {
     const connection = new AsteriskConnection(ws);
 
@@ -126,6 +124,28 @@ wss.on("connection", (ws: WebSocket) => {
 
     // Handle closed connections and errors from Agent WS
     agent.on("close", () => close("[bridge] agent closed"));
+
+
+    // greet the caller when the assistant starts
+    agent.on("assistantStarted", () => {
+        agent.send(
+            {
+                type: "conversation.item.create",
+                item: {
+                    type: "message",
+                    role: "system",
+                    content: [
+                        {
+                            type: "input_text",
+                            text:
+                                "Please greet the caller in clear Egyptian Arabic, introduce yourself as Mariam from Eshara, and ask how you can help.",
+                        },
+                    ],
+                },
+            }
+        );
+        agent.sendResponseCreate("Greet the caller and ask how you can help.");
+    });
 
 
     // Save the Asterisk media connection ids once the websocket channel is fully started.

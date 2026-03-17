@@ -13,7 +13,6 @@ const PORT = Number(process.env.PORT ?? 4000);
 
 
 
-
 export const ari = ARIClient.getInstance({ url: URL, host: HOST, app: APP, username: USERNAME, password: PASSWORD });
 
 

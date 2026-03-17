@@ -75,7 +75,6 @@ export class AsteriskConnection extends Connection {
             const e = {
                 connectionId: event.connection_id,
                 channelId: this.getChannelId(),
-                mediaChannelId: event.channel_id,
             };
             this.executeListener("start", e);
             return;

@@ -35,7 +35,7 @@ enum OpenAIEventType {
 }
 
 
-type ListenerType = "close" | "error" | "open" | "message";
+type ListenerType = "close" | "error" | "open" | "message" | "assistantStarted";
 
 type OpenAIEvent = {
     type: OpenAIEventType
@@ -143,7 +143,9 @@ export class OpenAIAgent {
     }
 
 
-    private send(data: any) {
+
+
+    public send(data: any) {
         if (!this.socket) {
             console.warn("[openai] cannot send message, socket not initialized:", data);
             return;
@@ -189,28 +191,12 @@ export class OpenAIAgent {
         this.sessionReady = true;
         if (this.sessionReady && !this.assistantStarted) {
             // Seed a user message to make the assistant greet immediately
-            this.send(
-                {
-                    type: "conversation.item.create",
-                    item: {
-                        type: "message",
-                        role: "user",
-                        content: [
-                            {
-                                type: "input_text",
-                                text:
-                                    "Please greet the caller in clear Egyptian Arabic, introduce yourself as Mariam from Eshara, and ask how you can help.",
-                            },
-                        ],
-                    },
-                }
-            );
-            this.sendResponseCreate("Greet the caller and ask how you can help.");
+            this.executeListener("assistantStarted");
             this.assistantStarted = true;
+
         }
         return;
     }
-
 
 
 
@@ -469,7 +455,7 @@ export class OpenAIAgent {
     public sendResponseCreate(instructions: string) {
         // Prevent sending a new response.create if there's already a pending response for the current call
         if (this.pendingResponses.size > 0) {
-            console.warn("[bridge] already have pending response for call_ids:", Array.from(this.pendingResponses.keys()));
+            console.warn("[openai] already have pending response for call_ids:", Array.from(this.pendingResponses.keys()));
             return;
         }
         this.send(
@@ -478,7 +464,7 @@ export class OpenAIAgent {
                 response: { instructions },
             }
         );
-        console.log("[bridge] sent response.create with instructions:", instructions);
+        console.log("[openai] sent response.create with instructions:", instructions);
     }
 
 
