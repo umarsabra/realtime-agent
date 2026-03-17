@@ -5,8 +5,8 @@ import { WebSocketServer, WebSocket } from "ws";
 import twilio from "twilio";
 import { AsteriskConnection } from "../service/asterisk";
 import { AgentTool, OpenAIAgent } from "../service/openai";
-import { tools, instructions } from "../agents/eshara";
-import { hangupCall } from "./ari";
+import { tools, instructions, buildEndCallTool } from "../agents/eshara";
+
 
 
 
@@ -52,52 +52,15 @@ app.all("/twilio", (_req: Request, res: Response) => {
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/media" });
 
-function getEndCallReason(args?: object) {
-    const value = (args as { reason?: unknown } | undefined)?.reason;
-    return typeof value === "string" && value.trim() ? value.trim() : null;
-}
 
-function buildEndCallTool(scheduleHangup: (reason?: string, delayMs?: number) => void): AgentTool {
-    return {
-        type: "function",
-        name: "end_call",
-        description:
-            "End the current phone call when the caller clearly wants to finish the conversation, says goodbye, or confirms they do not need anything else.",
-        parameters: {
-            type: "object",
-            properties: {
-                reason: {
-                    type: "string",
-                    description: "Short summary of why the call is ending.",
-                },
-            },
-            required: [],
-        },
-        execute: async (args) => ({
-            status: "ok",
-            data: {
-                ending: true,
-                reason: getEndCallReason(args) ?? "caller requested to end the call",
-            },
-        }),
-        onSuccess: ({ agent, args }) => {
-            agent.sendResponseCreate(
-                "In one short Egyptian Arabic sentence, politely say goodbye"
-            );
-            scheduleHangup(
-                getEndCallReason(args) ? `agent end_call: ${getEndCallReason(args)}` : "agent end_call",
-                3000
-            );
-        },
-    };
-}
+
+
+
+
 
 
 wss.on("connection", (ws: WebSocket) => {
-    console.log("New Asterisk WebSocket connection established.");
     const connection = new AsteriskConnection(ws);
-    let closed = false;
-    let hangupTimer: NodeJS.Timeout | null = null;
 
     if (!OPENAI_API_KEY) {
         connection.close(1011, "Missing OPENAI_API_KEY");
@@ -107,79 +70,85 @@ wss.on("connection", (ws: WebSocket) => {
     const agent = new OpenAIAgent({
         name: "Mariam",
         instructions,
+        connection,
         token: process.env.OPENAI_API_KEY ?? "",
         onAudioBuffer: (buffer) => connection.sendAudio(buffer),
         onUserStartedSpeaking: () => connection.clear(),
         model: OPENAI_MODEL,
     })
 
+
+    let closed = false;
+    let hangupTimerId: NodeJS.Timeout | null = null;
+
+
+
     const close = (reason?: string) => {
         if (closed) return;
         closed = true;
-        if (hangupTimer) {
-            clearTimeout(hangupTimer);
-            hangupTimer = null;
+        if (hangupTimerId) {
+            clearTimeout(hangupTimerId);
+            hangupTimerId = null;
         }
         if (reason) console.log("[bridge] closing:", reason);
         connection.close();
         agent.close();
     };
 
-    const scheduleHangup = (reason?: string, delayMs = 2500) => {
-        if (closed || hangupTimer) return;
-        hangupTimer = setTimeout(() => {
-            hangupTimer = null;
-            const activeChannelId = connection.getCallId();
-            if (!activeChannelId) {
-                console.warn("[bridge] no active Asterisk channel id available, falling back to socket close");
-                close(reason);
-                return;
-            }
 
-            void hangupCall(activeChannelId)
+
+
+    const scheduleHangup = (reason?: string, delayMs = 2500) => {
+        if (closed || hangupTimerId) return;
+        hangupTimerId = setTimeout(() => {
+            hangupTimerId = null;
+            connection.hangup()
                 .then(() => {
                     if (reason) {
-                        console.log("[bridge] requested ARI hangup:", reason);
+                        console.log("[bridge] requested hangup:", reason);
                     }
                 })
                 .catch((err) => {
-                    console.error("[bridge] failed to hang up call via ARI:", err);
+                    console.error("[bridge] failed to hang up call:", err);
                     close(`${reason ?? "agent end_call"} fallback close`);
                 });
         }, delayMs);
     };
+
+
+    // Register tools
     agent.registerTools([...tools, buildEndCallTool(scheduleHangup)]);
+
+
+    // Start the agent
     agent.connect()
 
 
-    // handle closed connections and errors from Agent WS
-    agent.on("close", () => close("openai close"));
+    // Handle closed connections and errors from Agent WS
+    agent.on("close", () => close("[bridge] agent closed"));
 
 
     // Save the Asterisk media connection ids once the websocket channel is fully started.
-    connection.onStart((data) => {
-        connection.setId(data.connection_id);
-        connection.setCallId(data.channel_id);
-    });
+    connection.onStart((e) => console.log("[bridge] connection started: ", e));
 
 
-    // When we receive media from Twilio, we stream it directly to OpenAI as it arrives for the most real-time experience. In production, you might want to implement buffering and handle backpressure more robustly.
+    // When we receive media, we stream it directly to Agent as it arrives for the most real-time experience.
     connection.onMedia((buffer) => {
         if (!agent.ready) return;
         agent.sendAudio(buffer);
     });
 
 
+    // Cleanup if either side closes
+    connection.onClose(() => close("connection closed"));
+
+
     // When Asterisk closes the media websocket, clean up the OpenAI side as well.
-    connection.onStop(() => close("asterisk stop"));
+    connection.onStop(() => close("connection stopped"));
 
 
     // Log and close on Asterisk WS errors
-    connection.onError((err) => close("asterisk error"));
-
-
-    // Cleanup if either side closes
-    connection.onClose(() => close("asterisk close"));
+    connection.onError((err) => close("connection error"));
 
 });
 

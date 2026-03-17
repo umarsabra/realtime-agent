@@ -1,6 +1,8 @@
 import Connection from "../core/Connection";
 import { WebSocket } from "ws";
 import { safeJsonParse } from "../utils";
+import ARIClient from "../utils/ARIClient";
+import { ari } from "..";
 
 
 type ListenerCallback = (args?: any) => void;
@@ -11,8 +13,11 @@ type AsteriskControlEvent = {
     channel?: string;
     [key: string]: unknown;
 };
-
 type ListenerType = "close" | "error" | "open" | "message";
+
+
+
+
 export class AsteriskConnection extends Connection {
     private initialized = false;
     private listeners = new Map<string, ListenerCallback[]>();
@@ -41,6 +46,9 @@ export class AsteriskConnection extends Connection {
 
 
 
+
+
+
     private onMessage(data: any, isBinary: boolean) {
         // if message is binary, it's audio data from the external media channel
         if (isBinary) {
@@ -61,17 +69,25 @@ export class AsteriskConnection extends Connection {
                 this.setId(event.connection_id);
             }
             if (typeof event.channel_id === "string") {
-                this.setCallId(event.channel_id);
+                this.setCallId(ari.getCallerIdByChannelId(event.channel_id) ?? event.channel_id);
             }
-            this.executeListener("start", event);
+
+            const e = {
+                connectionId: event.connection_id,
+                callId: this.getCallId(),
+                mediaChannelId: event.channel_id,
+            };
+            this.executeListener("start", e);
             return;
         }
 
         this.executeListener("message", event);
-
     }
 
+
+
     init() {
+        console.log("[asterisk] New Asterisk WebSocket connection established.");
         if (this.initialized) return;
 
         this.socket.on("message", (data, isBinary) => {
@@ -116,20 +132,38 @@ export class AsteriskConnection extends Connection {
 
 
 
-
-
-
     // Send audio bytes directly to the socket
-    sendAudio(bytes: Buffer): void {
+    public sendAudio(bytes: Buffer): void {
         this.socket.send(bytes, { binary: true });
     }
 
-    clear(): void {
+    public clear(): void {
         if (this.socket.readyState !== WebSocket.OPEN) return;
         this.socket.send("FLUSH_MEDIA");
     }
 
-    close(code?: number, reason?: any): void {
+
+
+    public async hangup() {
+        const channelId = this.getCallId();
+        if (!channelId) {
+            console.warn("[asterisk] cannot hangup call: no channel id associated with connection");
+            return;
+        }
+
+        const session = ari.getSessionByCallerId(channelId);
+        if (session) {
+            console.log(`[asterisk] hanging up caller channel ${channelId} via session`);
+            await session.channel.hangup();
+            return;
+        }
+
+        console.log(`[asterisk] hanging up channel ${this.getCallId()} via client`);
+        await ari.getClient()?.channels.hangup({ channelId });
+    }
+
+
+    public close(code?: number, reason?: any): void {
         if (
             this.socket.readyState !== WebSocket.OPEN &&
             this.socket.readyState !== WebSocket.CONNECTING

@@ -1,11 +1,10 @@
 import { safeJsonParse } from "../utils";
 import { WebSocket } from "ws";
 import { Tool } from "../core/Agent";
+import Connection from "../core/Connection";
 
 
 const noop = (arg?: any) => undefined;
-
-
 
 
 
@@ -66,6 +65,7 @@ interface OpenAIAgentOptions {
     instructions: string;
     model?: string;
     token: string;
+    connection: Connection
     onAudioBuffer?: (buffer: Buffer) => void;
     onUserStartedSpeaking?: () => void;
 }
@@ -95,6 +95,8 @@ export class OpenAIAgent {
     private onAudioBuffer: (buffer: Buffer) => void;
     private onUserStartedSpeaking: () => void;
 
+    private connection: Connection;
+
 
 
     constructor({
@@ -102,6 +104,7 @@ export class OpenAIAgent {
         instructions,
         model,
         token,
+        connection,
         onAudioBuffer = noop,
         onUserStartedSpeaking = noop
     }: OpenAIAgentOptions) {
@@ -109,6 +112,8 @@ export class OpenAIAgent {
         this.INSTRUCTIONS = instructions;
         this.MODEL = model ?? "gpt-realtime";
         this.TOKEN = token;
+
+        this.connection = connection
         this.onAudioBuffer = onAudioBuffer;
         this.onUserStartedSpeaking = onUserStartedSpeaking;
     }
