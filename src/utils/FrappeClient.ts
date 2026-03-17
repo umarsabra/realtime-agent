@@ -1,5 +1,5 @@
 import { httpJson } from "./http";
-import { TwilioCallService } from "../service/twilio";
+
 
 
 export type FrappeResourceResponse<T> = {
@@ -13,7 +13,6 @@ export type FrappeListResponse<T> = {
 
 export interface ToolDeps {
     frappe: FrappeClient;
-    twilio?: TwilioCallService; // optional in dev
 }
 
 

@@ -88,10 +88,6 @@ export default abstract class Connection {
      * Send a message to the connection. The implementation depends on the connection type. For example, for Twilio, it will send a JSON message through the WebSocket, while for Asterisk, it might write directly to the socket or send a specific command.
      * @param message 
      */
-    send(message: any) {
-        this.socket.send(message);
-    }
-
 
 
 

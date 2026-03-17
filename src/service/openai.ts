@@ -35,7 +35,7 @@ enum OpenAIEventType {
 }
 
 
-type ListenerType = "close" | "error" | "open" | "message" | "assistantStarted";
+type ListenerType = "close" | "error" | "open" | "message" | "assistantStarted" | "audio" | "userStartedSpeaking";
 
 type OpenAIEvent = {
     type: OpenAIEventType
@@ -66,7 +66,6 @@ interface OpenAIAgentOptions {
     model?: string;
     token: string;
     connection: Connection
-    onAudioBuffer?: (buffer: Buffer) => void;
     onUserStartedSpeaking?: () => void;
 }
 
@@ -92,8 +91,6 @@ export class OpenAIAgent {
     private listeners = new Map<string, ListenerCallback[]>();
     private sessionReady = false;
     private assistantStarted = false;
-    private onAudioBuffer: (buffer: Buffer) => void;
-    private onUserStartedSpeaking: () => void;
 
     private connection: Connection;
 
@@ -104,9 +101,7 @@ export class OpenAIAgent {
         instructions,
         model,
         token,
-        connection,
-        onAudioBuffer = noop,
-        onUserStartedSpeaking = noop
+        connection
     }: OpenAIAgentOptions) {
         this.NAME = name ?? "Agent";
         this.INSTRUCTIONS = instructions;
@@ -114,8 +109,6 @@ export class OpenAIAgent {
         this.TOKEN = token;
 
         this.connection = connection
-        this.onAudioBuffer = onAudioBuffer;
-        this.onUserStartedSpeaking = onUserStartedSpeaking;
     }
 
 
@@ -242,7 +235,7 @@ export class OpenAIAgent {
             const audioB64 = event.delta as string | undefined;
             if (audioB64) {
                 const audioBuffer = Buffer.from(audioB64, "base64");
-                this.onAudioBuffer(audioBuffer);
+                this.executeListener("audio", audioBuffer);
             }
             return;
         }
@@ -275,7 +268,7 @@ export class OpenAIAgent {
             if (this.pendingResponses.size > 0) {
                 this.send({ type: "response.cancel" });
             }
-            this.onUserStartedSpeaking && this.onUserStartedSpeaking()
+            this.executeListener("userStartedSpeaking");
             return;
         }
 
@@ -427,28 +420,45 @@ export class OpenAIAgent {
 
 
 
-    public on(eventType: ListenerType, callback: ListenerCallback) {
-        this.registerListener(eventType, callback);
-    }
-    private executeListener(eventType: string, args?: any) {
-        const listeners = this.listeners.get(eventType) ?? [];
-        listeners.forEach((callback) => {
-            try {
 
-                callback(args)
-            } catch (err) {
-                console.error(`[listener error] eventType: ${eventType} callback threw an error:`, err);
-            }
-        });
+    public onClose(listener: () => void) {
+        this.on("close", listener);
+    }
+    public onError(listener: (err: any) => void) {
+        this.on("error", listener);
+    }
+    public onOpen(listener: () => void) {
+        this.on("open", listener);
+    }
+    public onAssistantStarted(listener: () => void) {
+        this.on("assistantStarted", listener);
+    }
+
+    public onAudio(listener: (buffer: Buffer) => void) {
+        this.on("audio", listener);
+    }
+    public onUserStartedSpeaking(listener: () => void) {
+        this.on("userStartedSpeaking", listener);
+    }
+
+    private on(eventType: ListenerType, callback: ListenerCallback) {
+        this.registerListener(eventType, callback);
     }
     private registerListener(eventType: string, callback: ListenerCallback) {
         const existing = this.listeners.get(eventType) ?? [];
         this.listeners.set(eventType, [...existing, callback]);
     }
 
-
-
-
+    private executeListener(eventType: string, args?: any) {
+        const listeners = this.listeners.get(eventType) ?? [];
+        listeners.forEach((callback) => {
+            try {
+                callback(args)
+            } catch (err) {
+                console.error(`[listener error] eventType: ${eventType} callback threw an error:`, err);
+            }
+        });
+    }
 
 
 

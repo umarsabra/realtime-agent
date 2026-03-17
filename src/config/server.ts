@@ -3,9 +3,10 @@ import http from "http";
 import express, { Request, Response } from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import twilio from "twilio";
-import { AsteriskConnection } from "../service/asterisk";
-import { AgentTool, OpenAIAgent } from "../service/openai";
+import { OpenAIAgent } from "../service/openai";
 import { tools, instructions, buildEndCallTool } from "../agents/eshara";
+import { TwilioConnection } from "../service/twilio";
+import { AsteriskConnection } from "../service/asterisk";
 
 
 
@@ -54,9 +55,6 @@ const wss = new WebSocketServer({ server, path: "/media" });
 
 
 
-
-
-
 wss.on("connection", (ws: WebSocket) => {
     const connection = new AsteriskConnection(ws);
 
@@ -70,8 +68,6 @@ wss.on("connection", (ws: WebSocket) => {
         instructions,
         connection,
         token: process.env.OPENAI_API_KEY ?? "",
-        onAudioBuffer: (buffer) => connection.sendAudio(buffer),
-        onUserStartedSpeaking: () => connection.clear(),
         model: OPENAI_MODEL,
     })
 
@@ -96,11 +92,12 @@ wss.on("connection", (ws: WebSocket) => {
 
 
 
+
     const scheduleHangup = (reason?: string, delayMs = 2500) => {
         if (closed || hangupTimerId) return;
         hangupTimerId = setTimeout(() => {
             hangupTimerId = null;
-            connection.hangup()
+            connection.hangup(reason ?? "agent end_call")
                 .then(() => {
                     if (reason) {
                         console.log("[bridge] requested hangup:", reason);
@@ -116,18 +113,19 @@ wss.on("connection", (ws: WebSocket) => {
 
     // Register tools
     agent.registerTools([...tools, buildEndCallTool(scheduleHangup)]);
-
-
     // Start the agent
     agent.connect()
 
 
-    // Handle closed connections and errors from Agent WS
-    agent.on("close", () => close("[bridge] agent closed"));
 
+
+    // Send audio from Agent to connection as it arrives
+    agent.onAudio((buffer) => {
+        connection.sendAudio(buffer);
+    });
 
     // greet the caller when the assistant starts
-    agent.on("assistantStarted", () => {
+    agent.onAssistantStarted(() => {
         agent.send(
             {
                 type: "conversation.item.create",
@@ -146,6 +144,20 @@ wss.on("connection", (ws: WebSocket) => {
         );
         agent.sendResponseCreate("Greet the caller and ask how you can help.");
     });
+
+    agent.onUserStartedSpeaking(() => {
+        connection.clear()
+    });
+
+    // Handle closed connections and errors from Agent WS
+    agent.onClose(() => close("[bridge] agent closed"));
+
+    agent.onError((err) => close(`[bridge] agent error: ${err instanceof Error ? err.message : String(err)}`));
+
+
+
+
+
 
 
     // Save the Asterisk media connection ids once the websocket channel is fully started.
@@ -174,9 +186,4 @@ wss.on("connection", (ws: WebSocket) => {
 
 
 
-
-
-
-
-// Start the server
 export default server;

@@ -1,8 +1,8 @@
 import Connection from "../core/Connection";
 import { WebSocket } from "ws";
 import { safeJsonParse } from "../utils";
-import ARIClient from "../utils/ARIClient";
-import { ari } from "..";
+import { ari } from "../config/client";
+
 
 
 type ListenerCallback = (args?: any) => void;
@@ -143,7 +143,7 @@ export class AsteriskConnection extends Connection {
 
 
 
-    public async hangup() {
+    public async hangup(reason?: string): Promise<void> {
         const channelId = this.getChannelId();
         if (!channelId) {
             console.warn("[asterisk] cannot hangup call: no channel id associated with connection");

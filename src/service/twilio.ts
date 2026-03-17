@@ -1,6 +1,5 @@
-import twilio from "twilio";
+import { twilio } from "../config/client";
 import Connection from "../core/Connection";
-import { WebSocket } from "ws";
 import { safeJsonParse } from "../utils";
 
 export type TwilioInboundEvent =
@@ -16,44 +15,28 @@ export interface TwilioCallServiceConfig {
     authToken: string;
 }
 
-export class TwilioCallService {
-    private client: ReturnType<typeof twilio>;
-
-    constructor(private cfg: TwilioCallServiceConfig) {
-        this.client = twilio(cfg.accountSid, cfg.authToken);
-    }
-
-    async endCall(callSid: string, reason: string) {
-        await this.client.calls(callSid).update({ status: "completed" });
-        return { status: "ok" as const, message: `Call ended: ${reason}` };
-    }
-}
-
-
-
 
 
 
 export class TwilioConnection extends Connection {
 
-    private registry: Map<string, (data: any) => void> = new Map();
+    private listeners: Map<string, (data: any) => void> = new Map();
 
 
 
 
-    onStart(listener: (data: any) => void) {
-        this.registerEvent("start", listener);
+    public async hangup(reason?: string) {
+        const callId = this.getChannelId();
+        if (!callId) {
+            console.warn("[twilio] cannot hangup call: missing callId");
+            return { status: "error" as const, message: "Missing callId for hangup" };
+        }
+        const client = twilio.getClient();
+        await client
+            .calls(callId)
+            .update({ status: "completed" });
+        return { status: "ok" as const, message: `Call ended: ${reason}` };
     }
-
-    onMedia(listener: (data: any) => void) {
-        this.registerEvent("media", (data) => listener(data.media?.payload));
-    }
-
-    onStop(listener: (data: any) => void) {
-        this.registerEvent("stop", listener);
-    }
-
-
 
 
     init() {
@@ -64,7 +47,16 @@ export class TwilioConnection extends Connection {
                 console.warn("[twilio] received non-json message:", raw);
                 return;
             }
-            const listener = this.registry.has(event.event) ? this.registry.get(event.event) : null;
+
+
+            if (event.event === "start") {
+                const callId = event.start?.callSid;
+                const streamSid = event.start?.streamSid;
+                if (callId) this.setChannelId(callId);
+                if (streamSid) this.setId(streamSid);
+            }
+
+            const listener = this.listeners.has(event.event) ? this.listeners.get(event.event) : null;
             if (listener) {
                 try {
                     listener(event);
@@ -77,24 +69,54 @@ export class TwilioConnection extends Connection {
         });
     }
 
-    private registerEvent(event: "start" | "media" | "stop" | string, listener: (data: any) => void) {
-        this.registry.set(event, listener);
+    private registerListener(event: "start" | "media" | "stop" | string, listener: (data: any) => void) {
+        this.listeners.set(event, listener);
     }
 
 
-    public onError(listener: (data: any) => void) {
-        this.on("error", listener);
+
+
+
+
+    public onStart(listener: (e: any) => void) {
+        this.registerListener("start", listener);
+    }
+    public onError(listener: (e: any) => void) {
+        this.registerListener("error", listener);
     }
 
-    public onClose(listener: (data: any) => void): void {
-        this.on("close", listener);
+    public onClose(listener: (e: any) => void): void {
+        this.registerListener("close", listener);
     }
 
-    sendAudio(bytes: any) {
+    public onMedia(listener: (audio: Buffer) => void) {
+        this.registerListener("media", (event) => {
+            const payload = event.media?.payload;
+            listener(payload);
+        });
+    }
+
+    public onStop(listener: (e: any) => void) {
+        this.registerListener("stop", listener);
+    }
+
+
+
+
+
+
+
+    private send(message: any) {
+        const json = JSON.stringify(message);
+        this.socket.send(json);
+    }
+
+
+    public sendAudio(buffer: Buffer) {
         this.send({
             streamSid: this.getId(),
             event: "media",
-            media: { payload: bytes },
+            media: { payload: buffer.toString("base64") },
         })
     }
 

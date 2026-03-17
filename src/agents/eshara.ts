@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { AgentTool } from "../service/openai";
-import { TwilioCallService } from "../service/twilio";
+
 
 import { FrappeClient, ToolDeps } from "../utils/FrappeClient";
 import { AppError } from "../utils";
@@ -19,12 +19,6 @@ const frappe = new FrappeClient({
     timeoutMs: 10_000,
     retries: 1,
 });
-
-const twilioClient =
-    TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN
-        ? new TwilioCallService({ accountSid: TWILIO_ACCOUNT_SID, authToken: TWILIO_AUTH_TOKEN })
-        : undefined;
-
 
 
 
@@ -103,7 +97,7 @@ export function createOrderTools(deps: ToolDeps) {
     };
 }
 
-const orderTools = createOrderTools({ frappe, twilio: twilioClient });
+const orderTools = createOrderTools({ frappe });
 const createOrderTicket = orderTools.createOrderTicket;
 const getOrderDetails = orderTools.getOrderDetails;
 const updateOrderAddress = orderTools.updateOrderAddress;

@@ -1,6 +1,5 @@
 import "dotenv/config";
 import { AgentTool } from "../service/openai";
-import { TwilioCallService } from "../service/twilio";
 
 
 import { FrappeClient, ToolDeps } from "../utils/FrappeClient";
@@ -36,12 +35,6 @@ const frappe = new FrappeClient({
     timeoutMs: 10_000,
     retries: 1,
 });
-
-const twilioClient =
-    TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN
-        ? new TwilioCallService({ accountSid: TWILIO_ACCOUNT_SID, authToken: TWILIO_AUTH_TOKEN })
-        : undefined;
-
 
 
 export function createJobTools(deps: ToolDeps) {
@@ -87,7 +80,7 @@ export function createJobTools(deps: ToolDeps) {
     };
 }
 
-const jobTools = createJobTools({ frappe, twilio: twilioClient });
+const jobTools = createJobTools({ frappe });
 
 const tools: AgentTool[] = [
     {
