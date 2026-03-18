@@ -1,10 +1,10 @@
 import "dotenv/config";
-import { AgentTool } from "../service/openai";
+import { AgentTool, OpenAIAgent } from "../../service/openai";
 
 
-import { FrappeClient, ToolDeps } from "../utils/FrappeClient";
-import { AppError } from "../utils";
-import { ToolResult } from "../core/Agent";
+import { FrappeClient, ToolDeps } from "../../utils/FrappeClient";
+import { AppError } from "../../utils";
+import { ToolResult } from "../../core/Agent";
 const FRAPPE_API_KEY = process.env.FRAPPE_API_KEY ?? "";
 const FRAPPE_API_SECRET = process.env.FRAPPE_API_SECRET ?? "";
 const FRAPPE_BASE_URL = process.env.FRAPPE_BASE_URL ?? "https://app.midwestsolutions.com";
@@ -147,6 +147,27 @@ export function buildEndCallTool(scheduleHangup: (reason?: string, delayMs?: num
 
 
 
+
+
+export function onAgentStart(agent: OpenAIAgent) {
+    agent.send(
+        {
+            type: "conversation.item.create",
+            item: {
+                type: "message",
+                role: "system",
+                content: [
+                    {
+                        type: "input_text",
+                        text:
+                            "Please greet the caller in clear Egyptian Arabic, introduce yourself as Mariam from Eshara, and ask how you can help.",
+                    },
+                ],
+            },
+        }
+    );
+    agent.sendResponseCreate("Greet the caller and ask how you can help.");
+}
 
 
 export const tools: AgentTool[] = [

@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { AgentTool } from "../../service/openai";
+import { AgentTool, OpenAIAgent } from "../../service/openai";
 
 
 import { FrappeClient, ToolDeps } from "../../utils/FrappeClient";
@@ -36,6 +36,27 @@ const frappe = new FrappeClient({
     retries: 1,
 });
 
+
+
+export function onAgentStart(agent: OpenAIAgent) {
+    agent.send(
+        {
+            type: "conversation.item.create",
+            item: {
+                type: "message",
+                role: "system",
+                content: [
+                    {
+                        type: "input_text",
+                        text:
+                            "Please greet the caller in clear American English, introduce yourself as Wendy from Midwest Solutions, and ask how you can help.",
+                    },
+                ],
+            },
+        }
+    );
+    agent.sendResponseCreate("Greet the caller and ask how you can help.");
+}
 
 export function createJobTools(deps: ToolDeps) {
     return {
@@ -82,7 +103,7 @@ export function createJobTools(deps: ToolDeps) {
 
 const jobTools = createJobTools({ frappe });
 
-const tools: AgentTool[] = [
+export const tools: AgentTool[] = [
     {
         type: "function",
         name: "get_job_updates",
@@ -131,7 +152,51 @@ const tools: AgentTool[] = [
     }
 ];
 
-const instructions = `**Persona:**
+
+
+export function buildEndCallTool(scheduleHangup: (reason?: string, delayMs?: number) => void): AgentTool {
+    const getEndCallReason = (args?: object) => {
+        const value = (args as { reason?: unknown } | undefined)?.reason;
+        return typeof value === "string" && value.trim() ? value.trim() : null;
+    };
+
+
+    return {
+        type: "function",
+        name: "end_call",
+        description:
+            "End the current phone call when the caller clearly wants to finish the conversation, says goodbye, or confirms they do not need anything else.",
+        parameters: {
+            type: "object",
+            properties: {
+                reason: {
+                    type: "string",
+                    description: "Short summary of why the call is ending.",
+                },
+            },
+            required: [],
+        },
+        execute: async (args) => ({
+            status: "ok",
+            data: {
+                ending: true,
+                reason: getEndCallReason(args) ?? "caller requested to end the call",
+            },
+        }),
+        onSuccess: ({ agent, args }) => {
+            agent.sendResponseCreate(
+                "In one short American English sentence, politely say goodbye"
+            );
+            scheduleHangup(
+                getEndCallReason(args) ? `agent end_call: ${getEndCallReason(args)}` : "agent end_call",
+                3000
+            );
+        },
+    };
+}
+
+
+export const instructions = `**Persona:**
 You are Wendy. You work at Midwest Solutions Inc (the solar place). You aren’t a "virtual assistant"—you’re just Wendy. You’re chill, a little blunt, and definitely not a corporate robot. You talk like you’ve been working here for five years and you’re probably on your second cup of coffee.
 
 

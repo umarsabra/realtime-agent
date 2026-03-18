@@ -4,8 +4,9 @@ import express, { Request, Response } from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import twilio from "twilio";
 import { OpenAIAgent } from "../service/openai";
-import { tools, instructions, buildEndCallTool } from "../agents/eshara";
+import { tools, instructions, buildEndCallTool, onAgentStart } from "../agents/midwest";
 import { getConnection } from ".";
+
 
 
 
@@ -66,7 +67,7 @@ wss.on("connection", (ws: WebSocket) => {
     }
 
     const agent = new OpenAIAgent({
-        name: "Mariam",
+        name: "Wendy",
         instructions,
         connection,
         token: process.env.OPENAI_API_KEY ?? "",
@@ -128,23 +129,7 @@ wss.on("connection", (ws: WebSocket) => {
 
     // greet the caller when the assistant starts
     agent.onAssistantStarted(() => {
-        agent.send(
-            {
-                type: "conversation.item.create",
-                item: {
-                    type: "message",
-                    role: "system",
-                    content: [
-                        {
-                            type: "input_text",
-                            text:
-                                "Please greet the caller in clear Egyptian Arabic, introduce yourself as Mariam from Eshara, and ask how you can help.",
-                        },
-                    ],
-                },
-            }
-        );
-        agent.sendResponseCreate("Greet the caller and ask how you can help.");
+        onAgentStart(agent);
     });
 
     agent.onUserStartedSpeaking(() => {
