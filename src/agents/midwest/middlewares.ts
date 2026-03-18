@@ -1,4 +1,4 @@
-import { MiddlewareContext, MiddlewareFunction, OpenAIAgent, ToolCallback } from "../../service/openai";
+import { MiddlewareContext, MiddlewareFunction, OpenAIAgent, ToolCallback } from "../../core/OpenAIAgent";
 
 export const sessions = new Map<string, { account_number: string; authenticated: boolean }>();
 
@@ -12,6 +12,11 @@ export async function authenticateSession({ agent, args }: ToolCallback) {
     agent.setSessionId(account_number);
     console.log(`Session authenticated for account_number: ${account_number}`);
 }
+
+
+
+
+
 
 export async function authenticationMiddleware({ agent, args }: MiddlewareContext) {
     const sessionId = agent.getSessionId();

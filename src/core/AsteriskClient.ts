@@ -21,7 +21,7 @@ type CallSession = {
 
 
 
-export default class ARIClient {
+export default class AsteriskClient {
     private static readonly MEDIA_CHANNEL_PREFIX = "media:";
     private client: ari.Client | null = null;
     private config: ARIClientConfig;
@@ -31,11 +31,11 @@ export default class ARIClient {
 
 
 
-    private static instance: ARIClient;
+    private static instance: AsteriskClient;
 
     public static getInstance(config: ARIClientConfig) {
         if (this.instance) return this.instance;
-        this.instance = new ARIClient(config)
+        this.instance = new AsteriskClient(config)
         return this.instance;
     }
 
@@ -267,12 +267,12 @@ export default class ARIClient {
     }
 
     private getChannelIdFromMediaChannelId(channelId?: string | null) {
-        if (!channelId?.startsWith(ARIClient.MEDIA_CHANNEL_PREFIX)) return null;
-        return channelId.slice(ARIClient.MEDIA_CHANNEL_PREFIX.length) || null;
+        if (!channelId?.startsWith(AsteriskClient.MEDIA_CHANNEL_PREFIX)) return null;
+        return channelId.slice(AsteriskClient.MEDIA_CHANNEL_PREFIX.length) || null;
     }
 
     private getMediaChannelId(channelId: string) {
-        return `${ARIClient.MEDIA_CHANNEL_PREFIX}${channelId}`;
+        return `${AsteriskClient.MEDIA_CHANNEL_PREFIX}${channelId}`;
     }
 
 

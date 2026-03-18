@@ -1,8 +1,10 @@
 import "dotenv/config";
 import Connection from "../core/Connection";
-import { AsteriskConnection } from "../service/asterisk";
-import { TwilioConnection } from "../service/twilio";
 import { WebSocket } from "ws";
+import { TwilioConnection } from "../core/TwilioConnection";
+import { AsteriskConnection } from "../core/AsteriskConnection";
+
+
 
 export function getConnection(ws: WebSocket): Connection {
     if (process.env.CONNECTION_TYPE === "twilio") {

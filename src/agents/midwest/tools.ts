@@ -1,6 +1,6 @@
-import { AgentTool } from "../../service/openai";
-import { authenticateSession, middlewares, sessions } from "./middlewares";
-import { getAccountByAccountNumberAndPin, getAccountByPhoneNumber, getJobDetails, getJobUpdates } from "./service";
+import { AgentTool } from "../../core/OpenAIAgent";
+import { authenticateSession, middlewares } from "./middlewares";
+import { getAccountByAccountNumberAndPin, getJobDetails, getJobUpdates } from "./service";
 
 
 

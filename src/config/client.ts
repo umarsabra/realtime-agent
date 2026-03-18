@@ -1,6 +1,6 @@
 import "dotenv/config";
-import ARIClient from "../utils/ARIClient"
-import TwilioClient from "../utils/TwilioClient"
+import AsteriskClient from "../core/AsteriskClient"
+import TwilioClient from "../core/TwilioClient"
 
 
 
@@ -13,16 +13,17 @@ const CONNECTION_TYPE = process.env.CONNECTION_TYPE ?? "ws";
 
 
 
-let ari: ARIClient | null = null;
+let asteriskClient: AsteriskClient | null = null;
 if (CONNECTION_TYPE === "asterisk") {
-    ari = ARIClient.getInstance({ url: URL, host: HOST, app: APP, username: USERNAME, password: PASSWORD });
+    asteriskClient = AsteriskClient.getInstance({ url: URL, host: HOST, app: APP, username: USERNAME, password: PASSWORD });
 }
 
-
-
-export { ari }
-
-export const twilio = TwilioClient.getInstance({
+const twilioClient = TwilioClient.getInstance({
     accountSid: process.env.TWILIO_ACCOUNT_SID ?? "",
     authToken: process.env.TWILIO_AUTH_TOKEN ?? "",
 });
+
+
+
+export { asteriskClient, twilioClient }
+

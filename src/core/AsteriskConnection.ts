@@ -1,7 +1,7 @@
-import Connection from "../core/Connection";
+import Connection, { StartEventType } from "../core/Connection";
 import { WebSocket } from "ws";
+import { asteriskClient } from "../config/client";
 import { safeJsonParse } from "../utils";
-import { ari } from "../config/client";
 
 
 
@@ -21,67 +21,9 @@ type ListenerType = "close" | "error" | "open" | "message";
 export class AsteriskConnection extends Connection {
     private initialized = false;
     private listeners = new Map<string, ListenerCallback[]>();
+    private readonly type = "asterisk" as const;
 
 
-
-    public on(eventType: ListenerType, callback: ListenerCallback) {
-        this.registerListener(eventType, callback);
-    }
-    private executeListener(eventType: string, args?: any) {
-        const listeners = this.listeners.get(eventType) ?? [];
-        listeners.forEach((callback) => {
-            try {
-                callback(args)
-            } catch (err) {
-                console.error(`[listener error] eventType: ${eventType} callback threw an error:`, err);
-            }
-        });
-    }
-    private registerListener(eventType: string, callback: ListenerCallback) {
-        const existing = this.listeners.get(eventType) ?? [];
-        this.listeners.set(eventType, [...existing, callback]);
-    }
-
-
-
-
-
-
-
-
-    private onMessage(data: any, isBinary: boolean) {
-        // if message is binary, it's audio data from the external media channel
-        if (isBinary) {
-            const audio = Buffer.isBuffer(data) ? data : Buffer.from(data as any);
-            this.executeListener("audio", audio);
-            return;
-        }
-
-        const raw = Buffer.isBuffer(data) ? data.toString("utf8") : data.toString();
-        const event = this.parseControlMessage(raw);
-        if (!event) {
-            console.warn("[asterisk] received unknown control message:", raw);
-            return;
-        }
-
-        if (event.event === "MEDIA_START") {
-            if (typeof event.connection_id === "string") {
-                this.setId(event.connection_id);
-            }
-            if (typeof event.channel_id === "string") {
-                this.setChannelId(ari.getChannelIdByChannelId(event.channel_id) ?? event.channel_id);
-            }
-
-            const e = {
-                connectionId: event.connection_id,
-                channelId: this.getChannelId(),
-            };
-            this.executeListener("start", e);
-            return;
-        }
-
-        this.executeListener("message", event);
-    }
 
 
 
@@ -112,8 +54,69 @@ export class AsteriskConnection extends Connection {
 
 
 
+    public on(eventType: ListenerType, callback: ListenerCallback) {
+        this.registerListener(eventType, callback);
+    }
+    private registerListener(eventType: string, callback: ListenerCallback) {
+        const existing = this.listeners.get(eventType) ?? [];
+        this.listeners.set(eventType, [...existing, callback]);
+    }
+    private executeListener(eventType: string, args?: any) {
+        const listeners = this.listeners.get(eventType) ?? [];
+        listeners.forEach((callback) => {
+            try {
+                callback(args)
+            } catch (err) {
+                console.error(`[listener error] eventType: ${eventType} callback threw an error:`, err);
+            }
+        });
+    }
 
-    public onStart(listener: (data: any) => void): void {
+
+
+
+
+
+
+    private onMessage(data: any, isBinary: boolean) {
+        // if message is binary, it's audio data from the external media channel
+        if (isBinary) {
+            const audio = Buffer.isBuffer(data) ? data : Buffer.from(data as any);
+            this.executeListener("audio", audio);
+            return;
+        }
+
+        const raw = Buffer.isBuffer(data) ? data.toString("utf8") : data.toString();
+        const event = this.parseControlMessage(raw);
+        if (!event) {
+            console.warn("[asterisk] received unknown control message:", raw);
+            return;
+        }
+
+        if (event.event === "MEDIA_START") {
+            const channelId = event.channel_id?.split(":")[1];
+            const connectionId = event.connection_id;
+
+            if (!channelId || !connectionId) {
+                console.warn("[asterisk] MEDIA_START event missing channel_id or connection_id:", event);
+                return;
+            }
+
+            this.setId(connectionId);
+            this.setChannelId(channelId);
+
+            const e: StartEventType = {
+                channelId,
+                connectionId,
+            };
+            this.executeListener("start", e);
+            return;
+        }
+
+        this.executeListener("message", event);
+    }
+
+    public onStart(listener: (e: StartEventType) => void): void {
         this.registerListener("start", listener);
     }
     public onError(listener: (data: any) => void): void {
@@ -150,7 +153,7 @@ export class AsteriskConnection extends Connection {
             return { status: "error" as const, message: "No channel id associated with connection" };
         }
 
-        const session = ari.getSessionByChannelId(channelId);
+        const session = asteriskClient?.getSessionByChannelId(channelId);
         if (session) {
             console.log(`[asterisk] hanging up caller channel ${channelId} via session`);
             await session.channel.hangup();
@@ -159,13 +162,19 @@ export class AsteriskConnection extends Connection {
 
         console.log(`[asterisk] hanging up channel ${this.getChannelId()} via client`);
 
-        const res = await ari.getClient()?.channels.hangup({ channelId });
+        const res = await asteriskClient?.getClient()?.channels.hangup({ channelId });
         if (!res) {
             console.warn(`[asterisk] failed to hangup channel ${channelId}: no response from ARI client`);
             return { status: "error" as const, message: `Failed to hangup channel ${channelId}` };
         }
         return { status: "ok" as const, message: `Call ended: ${reason}` }
     }
+
+
+
+
+
+
 
 
     public close(code?: number, reason?: any): void {

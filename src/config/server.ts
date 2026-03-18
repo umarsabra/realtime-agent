@@ -3,7 +3,7 @@ import http from "http";
 import express, { Request, Response } from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import twilio from "twilio";
-import { OpenAIAgent } from "../service/openai";
+import { OpenAIAgent } from "../core/OpenAIAgent";
 import { tools, instructions, buildEndCallTool, onAgentStart } from "../agents/midwest";
 import { getConnection } from ".";
 
@@ -119,9 +119,8 @@ wss.on("connection", (ws: WebSocket) => {
     };
 
 
-    // Register tools
+    // Register tools and connect the agent to start processing media and events from the connection.
     agent.registerTools([...tools, buildEndCallTool(scheduleHangup)]);
-    // Start the agent
     agent.connect()
 
 
@@ -153,7 +152,9 @@ wss.on("connection", (ws: WebSocket) => {
 
 
     // Save the Asterisk media connection ids once the websocket channel is fully started.
-    connection.onStart((e) => console.log("[bridge] connection started: ", e));
+    connection.onStart((e) => {
+        console.log("[bridge] connection started: ", e)
+    });
 
 
     // When we receive media, we stream it directly to Agent as it arrives for the most real-time experience.

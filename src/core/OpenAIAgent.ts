@@ -1,7 +1,7 @@
 import { safeJsonParse } from "../utils";
 import { WebSocket } from "ws";
-import { Tool } from "../core/Agent";
-import Connection from "../core/Connection";
+import { Tool } from "./Agent";
+import Connection from "./Connection";
 
 
 const noop = (arg?: any) => undefined;
@@ -77,8 +77,6 @@ interface OpenAIAgentOptions {
     token: string;
     connection: Connection
     defaultToolMiddlewares?: MiddlewareFunction[]
-
-    onUserStartedSpeaking?: () => void;
 }
 
 

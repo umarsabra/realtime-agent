@@ -3,10 +3,19 @@ import { WebSocket } from "ws";
 
 
 
+
+
+export type StartEventType = {
+    channelId: string;
+    connectionId: string;
+}
+
+
+
 export default abstract class Connection {
-    public socket: WebSocket;
     private id: string | null | undefined;
     private channelId: string | null | undefined;
+    public socket: WebSocket;
 
 
 
@@ -15,6 +24,9 @@ export default abstract class Connection {
         this.socket = websocket;
         this.init();
     }
+
+
+
 
 
 
@@ -61,9 +73,11 @@ export default abstract class Connection {
      * Register a listener when the call starts. The implementation depends on the connection type. For example, for Twilio, it will listen to a specific "start" event from the WebSocket messages, while for Asterisk, it might listen to a specific message or command indicating the start of the call.
      * @param listener 
      */
-    onStart(listener: (data: any) => void) {
+    onStart(listener: (e: StartEventType) => void) {
         console.warn("onStart not implemented for this connection type, using generic 'message' event listener");
     }
+
+
 
     /**
      * Register a listener when the call stops. The implementation depends on the connection type. For example, for Twilio, it will listen to a specific "stop" event from the WebSocket messages, while for Asterisk, it might listen to a specific message or command indicating the end of the call.

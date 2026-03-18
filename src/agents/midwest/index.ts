@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { AgentTool } from "../../service/openai";
+import { AgentTool } from "../../core/OpenAIAgent";
 import { FrappeClient } from "../../utils/FrappeClient";
 export * from "./events";
 import fs from "fs";

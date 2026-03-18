@@ -1,4 +1,4 @@
-import { OpenAIAgent } from "../../service/openai";
+import { OpenAIAgent } from "../../core/OpenAIAgent";
 
 
 
