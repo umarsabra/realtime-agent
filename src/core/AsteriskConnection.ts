@@ -153,10 +153,10 @@ export class AsteriskConnection extends Connection {
             return { status: "error" as const, message: "No channel id associated with connection" };
         }
 
-        const session = asteriskClient?.getSessionByChannelId(channelId);
+        const session = asteriskClient?.getSessionForChannel(channelId);
         if (session) {
             console.log(`[asterisk] hanging up caller channel ${channelId} via session`);
-            await session.channel.hangup();
+            await session.callChannel.hangup();
             return { status: "ok" as const, message: `Call ended: ${reason}` };
         }
 
