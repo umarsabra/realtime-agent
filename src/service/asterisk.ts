@@ -143,22 +143,28 @@ export class AsteriskConnection extends Connection {
 
 
 
-    public async hangup(reason?: string): Promise<void> {
+    public async hangup(reason?: string): Promise<{ status: "ok" | "error"; message: string }> {
         const channelId = this.getChannelId();
         if (!channelId) {
             console.warn("[asterisk] cannot hangup call: no channel id associated with connection");
-            return;
+            return { status: "error" as const, message: "No channel id associated with connection" };
         }
 
         const session = ari.getSessionByChannelId(channelId);
         if (session) {
             console.log(`[asterisk] hanging up caller channel ${channelId} via session`);
             await session.channel.hangup();
-            return;
+            return { status: "ok" as const, message: `Call ended: ${reason}` };
         }
 
         console.log(`[asterisk] hanging up channel ${this.getChannelId()} via client`);
-        await ari.getClient()?.channels.hangup({ channelId });
+
+        const res = await ari.getClient()?.channels.hangup({ channelId });
+        if (!res) {
+            console.warn(`[asterisk] failed to hangup channel ${channelId}: no response from ARI client`);
+            return { status: "error" as const, message: `Failed to hangup channel ${channelId}` };
+        }
+        return { status: "ok" as const, message: `Call ended: ${reason}` }
     }
 
 

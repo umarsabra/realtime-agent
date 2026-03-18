@@ -1,5 +1,8 @@
 import { WebSocket } from "ws";
 
+
+
+
 export default abstract class Connection {
     public socket: WebSocket;
     private id: string | null | undefined;
@@ -14,6 +17,15 @@ export default abstract class Connection {
     }
 
 
+
+
+    public async hangup(reason?: string): Promise<{ status: "ok" | "error"; message: string }> {
+        console.warn("hangup not implemented for this connection type");
+        return new Promise((resolve) => {
+            this.close(1000, reason);
+            resolve({ status: "ok", message: `Call ended: ${reason}` });
+        });
+    }
 
 
     /**

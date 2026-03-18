@@ -5,8 +5,8 @@ import { WebSocketServer, WebSocket } from "ws";
 import twilio from "twilio";
 import { OpenAIAgent } from "../service/openai";
 import { tools, instructions, buildEndCallTool } from "../agents/eshara";
-import { TwilioConnection } from "../service/twilio";
-import { AsteriskConnection } from "../service/asterisk";
+import { getConnection } from ".";
+
 
 
 
@@ -55,8 +55,10 @@ const wss = new WebSocketServer({ server, path: "/media" });
 
 
 
+
+
 wss.on("connection", (ws: WebSocket) => {
-    const connection = new AsteriskConnection(ws);
+    const connection = getConnection(ws);
 
     if (!OPENAI_API_KEY) {
         connection.close(1011, "Missing OPENAI_API_KEY");

@@ -1,10 +1,10 @@
 import "dotenv/config";
-import { AgentTool } from "../service/openai";
+import { AgentTool } from "../../service/openai";
 
 
-import { FrappeClient, ToolDeps } from "../utils/FrappeClient";
-import { AppError } from "../utils";
-import { ToolResult } from "../core/Agent";
+import { FrappeClient, ToolDeps } from "../../utils/FrappeClient";
+import { AppError } from "../../utils";
+import { ToolResult } from "../../core/Agent";
 
 
 // You can expand these types as you learn your real Job/Update schema.
