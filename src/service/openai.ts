@@ -46,14 +46,24 @@ type OpenAIEvent = {
 }
 
 
-type ToolCallback = {
+export type ToolCallback = {
     agent: OpenAIAgent
     args?: any
     result?: any
     error?: any
 }
 
+
+export type MiddlewareContext = {
+    agent: OpenAIAgent
+    args?: any
+}
+
+
+export type MiddlewareFunction = (callback: MiddlewareContext) => Promise<any>
+
 export type AgentTool = Tool & {
+    middlewares?: MiddlewareFunction[]
     execute?: (args?: object) => Promise<any>;
     onSuccess?: (obj: ToolCallback) => void;
     onError?: (args?: any) => void;
@@ -66,6 +76,8 @@ interface OpenAIAgentOptions {
     model?: string;
     token: string;
     connection: Connection
+    defaultToolMiddlewares?: MiddlewareFunction[]
+
     onUserStartedSpeaking?: () => void;
 }
 
@@ -91,8 +103,9 @@ export class OpenAIAgent {
     private listeners = new Map<string, ListenerCallback[]>();
     private sessionReady = false;
     private assistantStarted = false;
-
+    private defaultToolMiddlewares: MiddlewareFunction[] = [];
     private connection: Connection;
+    private sessionId: string | null = null;
 
 
 
@@ -101,13 +114,14 @@ export class OpenAIAgent {
         instructions,
         model,
         token,
-        connection
+        connection,
+        defaultToolMiddlewares = []
     }: OpenAIAgentOptions) {
         this.NAME = name ?? "Agent";
         this.INSTRUCTIONS = instructions;
         this.MODEL = model ?? "gpt-realtime";
         this.TOKEN = token;
-
+        this.defaultToolMiddlewares = defaultToolMiddlewares;
         this.connection = connection
     }
 
@@ -340,39 +354,64 @@ export class OpenAIAgent {
         }
 
 
-        let result: any;
-        try {
-            result = await tool.execute(args)
-        } catch (e: any) {
-            if (tool.onError) tool.onError(e);
-            else {
-                console.error(`[tool error] ${toolName} threw an error:`, e);
-                result = { status: "error", message: e?.message ?? String(e) };
+
+        // run middlewares
+        let hasError = false;
+        let middlewareError: any = null;
+        const middlewares = [...(this.defaultToolMiddlewares ?? []), ...(tool.middlewares ?? [])];
+        if (middlewares.length > 0) {
+            for (const middleware of middlewares) {
+                try {
+                    await middleware({ agent: this, args });
+                } catch (e) {
+                    hasError = true;
+                    middlewareError = e;
+                    console.error(`[middleware error] tool: ${toolName} middleware threw an error:`, e);
+                    break;
+                }
             }
-        } finally {
-            console.log(`[tool call] ${toolName}(${effectiveArgsJson})`);
-            console.log(`[tool result] ${toolName}:`, result);
         }
 
-        // Always send tool output back to OpenAI
-        if (this.ready) {
-            this.send(
-                {
-                    type: "conversation.item.create",
-                    item: {
-                        type: "function_call_output",
-                        call_id: callId,
-                        output: JSON.stringify(result),
-                    },
+
+
+
+        let result: any = null
+        if (!hasError) {
+            try {
+                result = await tool.execute(args)
+            } catch (e: any) {
+                if (tool.onError) tool.onError(e);
+                else {
+                    console.error(`[tool error] ${toolName} threw an error:`, e);
+                    result = { status: "error", message: e?.message ?? String(e) };
                 }
-            );
+            } finally {
+                console.log(`[tool call] ${toolName}(${effectiveArgsJson})`);
+                console.log(`[tool result] ${toolName}:`, result);
+            }
         }
+
+
+        // Always send tool output back to OpenAI
+        this.send(
+            {
+                type: "conversation.item.create",
+                item: {
+                    type: "function_call_output",
+                    call_id: callId,
+                    output: JSON.stringify(result),
+                },
+            }
+        );
+
 
         // cleanup buffer
         this.callArgsBuffer.delete(callId);
 
-        // run on tool success
-        tool.onSuccess && tool.onSuccess({ agent: this, result, args })
+
+        if (!hasError) {
+            tool.onSuccess && tool.onSuccess({ agent: this, result, args })
+        }
     }
 
 
@@ -502,6 +541,15 @@ export class OpenAIAgent {
         return Boolean(this.socket && this.socket.readyState === WebSocket.OPEN && this.sessionReady);
     }
 
+
+
+    public getSessionId() {
+        return this.sessionId;
+    }
+
+    public setSessionId(sessionId: string) {
+        this.sessionId = sessionId;
+    }
 
 
 } 

@@ -72,6 +72,11 @@ wss.on("connection", (ws: WebSocket) => {
         connection,
         token: process.env.OPENAI_API_KEY ?? "",
         model: OPENAI_MODEL,
+        defaultToolMiddlewares: [
+            async ({ agent, args }) => {
+                console.log(`[tool middleware] ${args.toolName} called with args:`, args);
+            }
+        ]
     })
 
 

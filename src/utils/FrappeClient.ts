@@ -99,7 +99,7 @@ export class FrappeClient {
     async list<T>(
         doctype: string,
         params: {
-            filters?: [][];
+            filters?: any[];
             fields?: string[];
             limit_page_length?: number;
             order_by?: string;
