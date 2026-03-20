@@ -64,7 +64,7 @@ export type MiddlewareFunction = (callback: MiddlewareContext) => Promise<any>
 
 export type AgentTool = Tool & {
     middlewares?: MiddlewareFunction[]
-    execute?: (args?: object) => Promise<any>;
+    execute?: (args?: Record<string, any>) => Promise<any>;
     onSuccess?: (obj: ToolCallback) => void;
     onError?: (args?: any) => void;
 }
@@ -477,6 +477,10 @@ export class OpenAIAgent {
     public onUserStartedSpeaking(listener: () => void) {
         this.on("userStartedSpeaking", listener);
     }
+
+
+
+
 
     private on(eventType: ListenerType, callback: ListenerCallback) {
         this.registerListener(eventType, callback);

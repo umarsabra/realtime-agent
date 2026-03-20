@@ -32,7 +32,7 @@ type Account = {
 export async function getAccountByPhoneNumber({ phone_number }: { phone_number: string }): Promise<ToolResult<Account>> {
     try {
         if (!phone_number) throw new AppError("Missing phone_number", "error", "MISSING_PHONE_NUMBER");
-        const accounts = await frappe.list<Account>("Midwest Account", {
+        const accounts = await frappe.getList<Account>("Midwest Account", {
             filters: [["phone_number", "=", phone_number]],
             fields: ["*"],
             limit_page_length: 1,
@@ -94,7 +94,7 @@ export async function getJobUpdates({ job_id: jobId, stage }: { job_id: string; 
         if (stage) {
             filters.push(["reference_doctype", "=", stage]);
         }
-        const updates = await frappe.list<Update>("Update", {
+        const updates = await frappe.getList<Update>("Update", {
             filters,
             fields: ["*"],
             order_by: "creation asc",

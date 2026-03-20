@@ -30,7 +30,7 @@ export const buildMidwestAgent = (connection: Connection, scheduleHangup: any) =
 
 export const buildEsharaAgent = (connection: Connection, scheduleHangup: any) => {
     const agent = new OpenAIAgent({
-        name: "Mariam",
+        name: "Gamila",
         instructions: esharaInstructions,
         connection,
         token: process.env.OPENAI_API_KEY ?? "",

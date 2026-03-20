@@ -16,6 +16,6 @@ export type Tool = {
                 enum?: string[];
             };
         };
-        required: string[];
+        required?: string[];
     };
 };

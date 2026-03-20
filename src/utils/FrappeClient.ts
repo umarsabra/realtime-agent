@@ -96,7 +96,7 @@ export class FrappeClient {
 
 
 
-    async list<T>(
+    async getList<T>(
         doctype: string,
         params: {
             filters?: any[];
