@@ -73,7 +73,7 @@ You have access to the following tools:
 **Purpose:** Retrieve all conversation messages, or messages for a specific conversation if `conversation_id` is provided.
 
 **When to use:**
-- User asks to see messages in a conversation
+- User asks to see all system message
 - User wants message history
 - User asks what was said in a conversation
 - User wants a summary of a conversation
