@@ -4,12 +4,14 @@ import TwilioClient from "../core/TwilioClient"
 
 
 
-const URL: string = "http://192.168.1.58:8088"
+const URL: string = "http://192.168.1.100:8088"
 const USERNAME: string = "express"
 const HOST: string = "express"
 const APP: string = "realtime-ai-agent"
 const PASSWORD: string = "supersecret"
 const CONNECTION_TYPE = process.env.CONNECTION_TYPE ?? "ws";
+
+
 
 
 

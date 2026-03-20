@@ -14,6 +14,7 @@ export type StartEventType = {
 
 export default abstract class Connection {
     private id: string | null | undefined;
+    private extension: string | null | undefined;
     private channelId: string | null | undefined;
     public socket: WebSocket;
 
@@ -156,6 +157,9 @@ export default abstract class Connection {
     getId() {
         return this.id;
     }
+    getExtension() {
+        return this.extension;
+    }
     getChannelId() {
         return this.channelId;
     }
@@ -173,6 +177,9 @@ export default abstract class Connection {
     }
     setChannelId(channelId?: string | null) {
         this.channelId = channelId;
+    }
+    setExtension(extension?: string | null) {
+        this.extension = extension;
     }
 
 

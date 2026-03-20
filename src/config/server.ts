@@ -4,18 +4,14 @@ import express, { Request, Response } from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import twilio from "twilio";
 import { OpenAIAgent } from "../core/OpenAIAgent";
-import { tools, instructions, buildEndCallTool, onAgentStart } from "../agents/midwest";
 import { getConnection } from ".";
-
-
-
+import { buildExtensionAgent, onExtensionAgentStart } from "../agents";
 
 
 
 
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
-const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-realtime";
 const PUBLIC_WSS_URL = process.env.PUBLIC_WSS_URL ?? ""; // e.g. wss://your-domain.com/media
 
 const app = express();
@@ -66,24 +62,10 @@ wss.on("connection", (ws: WebSocket) => {
         return;
     }
 
-    const agent = new OpenAIAgent({
-        name: "Wendy",
-        instructions,
-        connection,
-        token: process.env.OPENAI_API_KEY ?? "",
-        model: OPENAI_MODEL,
-        defaultToolMiddlewares: [
-            async ({ agent, args }) => {
-                console.log(`[tool middleware] ${args.toolName} called with args:`, args);
-            }
-        ]
-    })
-
 
     let closed = false;
     let hangupTimerId: NodeJS.Timeout | null = null;
-
-
+    let agent: OpenAIAgent | null = null;
 
     const close = (reason?: string) => {
         if (closed) return;
@@ -94,11 +76,8 @@ wss.on("connection", (ws: WebSocket) => {
         }
         if (reason) console.log("[bridge] closing:", reason);
         connection.close();
-        agent.close();
+        agent?.close();
     };
-
-
-
 
 
     const scheduleHangup = (reason?: string, delayMs = 2500) => {
@@ -118,34 +97,31 @@ wss.on("connection", (ws: WebSocket) => {
         }, delayMs);
     };
 
+    const attachAgentListeners = (activeAgent: OpenAIAgent) => {
+        activeAgent.onAudio((buffer) => {
+            connection.sendAudio(buffer);
+        });
 
-    // Register tools and connect the agent to start processing media and events from the connection.
-    agent.registerTools([...tools, buildEndCallTool(scheduleHangup)]);
-    agent.connect()
+        activeAgent.onAssistantStarted(() => {
+            onExtensionAgentStart(connection, activeAgent);
+        });
 
+        activeAgent.onUserStartedSpeaking(() => {
+            connection.clear();
+        });
 
+        activeAgent.onClose(() => close("[bridge] agent closed"));
+        activeAgent.onError((err) => close(`[bridge] agent error: ${err instanceof Error ? err.message : String(err)}`));
+    };
 
-
-    // Send audio from Agent to connection as it arrives
-    agent.onAudio((buffer) => {
-        connection.sendAudio(buffer);
-    });
-
-    // greet the caller when the assistant starts
-    agent.onAssistantStarted(() => {
-        onAgentStart(agent);
-    });
-
-    agent.onUserStartedSpeaking(() => {
-        connection.clear()
-    });
-
-    // Handle closed connections and errors from Agent WS
-    agent.onClose(() => close("[bridge] agent closed"));
-
-    agent.onError((err) => close(`[bridge] agent error: ${err instanceof Error ? err.message : String(err)}`));
-
-
+    const ensureAgent = () => {
+        if (agent) return agent;
+        const activeAgent = buildExtensionAgent(connection, scheduleHangup);
+        attachAgentListeners(activeAgent);
+        activeAgent.connect();
+        agent = activeAgent;
+        return agent;
+    };
 
 
 
@@ -153,13 +129,14 @@ wss.on("connection", (ws: WebSocket) => {
 
     // Save the Asterisk media connection ids once the websocket channel is fully started.
     connection.onStart((e) => {
-        console.log("[bridge] connection started: ", e)
+        console.log("[bridge] connection started: ", e);
+        ensureAgent();
     });
 
 
     // When we receive media, we stream it directly to Agent as it arrives for the most real-time experience.
     connection.onMedia((buffer) => {
-        if (!agent.ready) return;
+        if (!agent?.ready) return;
         agent.sendAudio(buffer);
     });
 
@@ -173,7 +150,7 @@ wss.on("connection", (ws: WebSocket) => {
 
 
     // Log and close on Asterisk WS errors
-    connection.onError((err) => close("connection error"));
+    connection.onError(() => close("connection error"));
 
 });
 

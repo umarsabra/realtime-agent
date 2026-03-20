@@ -4,7 +4,6 @@ import { AppError } from "../../utils";
 
 
 
-
 type Job = Record<string, unknown> & { name?: string };
 
 type Update = {
@@ -24,6 +23,9 @@ type Account = {
     job_title: string;
     phone_number: string;
 }
+
+
+
 
 
 

@@ -24,9 +24,9 @@ type CallSession = {
 
 
 export default class AsteriskClient {
-    private static readonly MEDIA_CHANNEL_PREFIX = "media:";
     private client: ari.Client | null = null;
     private config: ARIClientConfig;
+    private static readonly MEDIA_CHANNEL_PREFIX = "media:";
     private sessionsByCallChannelId = new Map<string, CallSession>();
     private sessionsByMediaChannelId = new Map<string, CallSession>();
 
@@ -79,6 +79,7 @@ export default class AsteriskClient {
 
             const session = this.getSessionForChannel(channel.id);
             if (session && channel.id === session.mediaChannelId) {
+                console.log(`[ari] external media channel ${channel.id} started, attaching to session call=${session.callChannelId}`);
                 await this.attachMediaChannel(session, channel);
                 return;
             }
@@ -106,11 +107,12 @@ export default class AsteriskClient {
         });
 
 
-        this.client.start(this.config.app).then(() => {
-            console.log("ARI client started");
-        }).catch((err) => {
-            console.error("Failed to start ARI client:", err);
-        });
+        this.client.start(this.config.app)
+            .then(() => {
+                console.log("ARI client started");
+            }).catch((err) => {
+                console.error("Failed to start ARI client:", err);
+            });
     }
 
     private async createCallSession(callChannel: ari.Channel) {
@@ -163,13 +165,10 @@ export default class AsteriskClient {
             console.log(`[ari] requested external media channel call=${callChannelId} media=${mediaChannelId} bridge=${bridge.id}`);
         } catch (err) {
             console.error(`[ari] failed to set up session for ${callChannelId} during "${step}":`, err);
-
             if (session) {
                 this.removeSession(session);
             }
-
             await this.hangupMediaChannel(mediaChannelId);
-
             if (bridge) {
                 try {
                     await bridge.destroy();
@@ -246,13 +245,21 @@ export default class AsteriskClient {
         this.sessionsByMediaChannelId.delete(session.mediaChannelId);
     }
 
+
+
+
+    /**
+     * Hangs up the media channel associated with the given media channel id, if it exists.
+     * @param mediaChannelId the media channel id associated with the session to hang up
+     * @param mediaChannel  the media channel object to hang up, if already available (optional optimization to avoid fetching the channel again if we already have it)
+     * @returns a promise that resolves when the hangup request is complete
+     */
     private async hangupMediaChannel(mediaChannelId: string, mediaChannel?: ari.Channel | null) {
         try {
             if (mediaChannel) {
                 await mediaChannel.hangup();
                 return;
             }
-
             if (this.client) {
                 await this.client.channels.hangup({ channelId: mediaChannelId });
             }
@@ -268,6 +275,14 @@ export default class AsteriskClient {
 
 
 
+
+    /**
+     * 
+     * Hangs up the call associated with the given channel id, if it exists.
+     * Used to ensure calls are cleaned up when sessions are removed due to unexpected channel destruction or stasis end events.
+     * @param channelId the call or media channel id associated with the session to hang up
+     * @returns a promise that resolves when the hangup request is complete
+     */
     public async hangupCallByChannelId(channelId: string) {
         const session = this.getSessionForChannel(channelId);
         if (!session) {
@@ -277,8 +292,21 @@ export default class AsteriskClient {
         await session.callChannel.hangup();
     }
 
+
+
+
+
+
+    /**
+     * Finds the session associated with the given channel id, if it exists.
+     * Used by AsteriskConnection instances to route hangup requests to the correct call channel,
+     * since media channels are bridged but not mixed and thus don't receive events for the call channel.
+     * @param channelId the call or media channel id associated with the session
+     * @returns the session associated with the given channel id, or null if not found
+     */
     public getSessionForChannel(channelId?: string | null): CallSession | null {
         if (!channelId) return null;
+        // First check if the channel id belongs to a call channel, then check if it belongs to a media channel.
         return this.sessionsByCallChannelId.get(channelId)
             ?? this.sessionsByMediaChannelId.get(channelId)
             ?? null;

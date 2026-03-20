@@ -40,8 +40,8 @@ export class AsteriskConnection extends Connection {
                 code,
                 reason: reason.toString("utf8"),
             };
-            this.executeListener("stop", payload);
             this.executeListener("close", payload);
+            this.executeListener("stop", payload);
         });
 
         this.socket.on("error", (err) => {
@@ -72,7 +72,25 @@ export class AsteriskConnection extends Connection {
         });
     }
 
+    private getStringControlValue(event: AsteriskControlEvent, key: string): string | null {
+        const value = event[key];
+        return typeof value === "string" && value.trim() ? value.trim() : null;
+    }
 
+    private resolveExtension(channelId: string, event: AsteriskControlEvent): string | null {
+        const directExtension =
+            this.getStringControlValue(event, "extension")
+            ?? this.getStringControlValue(event, "exten");
+        if (directExtension) {
+            return directExtension;
+        }
+
+        const session = asteriskClient?.getSessionForChannel(channelId);
+        const dialplanExtension = session?.callChannel?.dialplan?.exten;
+        return typeof dialplanExtension === "string" && dialplanExtension.trim()
+            ? dialplanExtension.trim()
+            : null;
+    }
 
 
 
@@ -94,27 +112,41 @@ export class AsteriskConnection extends Connection {
         }
 
         if (event.event === "MEDIA_START") {
-            const channelId = event.channel_id?.split(":")[1];
-            const connectionId = event.connection_id;
-
-            if (!channelId || !connectionId) {
-                console.warn("[asterisk] MEDIA_START event missing channel_id or connection_id:", event);
-                return;
-            }
-
-            this.setId(connectionId);
-            this.setChannelId(channelId);
-
-            const e: StartEventType = {
-                channelId,
-                connectionId,
-            };
-            this.executeListener("start", e);
+            this.handleMediaStart(event);
             return;
         }
 
         this.executeListener("message", event);
     }
+
+
+
+
+    private handleMediaStart(event: AsteriskControlEvent) {
+        const channelId = event.channel_id?.split(":")[1];
+        const connectionId = event.connection_id;
+
+        if (!channelId || !connectionId) {
+            console.warn("[asterisk] MEDIA_START event missing channel_id or connection_id:", event);
+            return;
+        }
+
+        this.setId(connectionId);
+        this.setChannelId(channelId);
+
+        const extension = this.resolveExtension(channelId, event);
+        if (extension) {
+            this.setExtension(extension);
+            console.log(`[asterisk] resolved extension ${extension} for channel ${channelId}`);
+        }
+
+        const e: StartEventType = {
+            channelId,
+            connectionId,
+        };
+        this.executeListener("start", e);
+    }
+
 
     public onStart(listener: (e: StartEventType) => void): void {
         this.registerListener("start", listener);
